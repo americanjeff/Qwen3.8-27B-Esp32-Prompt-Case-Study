@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ESP32-C3-DevKitM-1 Interactive LED Circuit Dashboard</title>
+<style>
+  :root {
+    --bg: #1a1a2e;
+    --panel-bg: #16213e;
+    --text: #e0e0e0;
+    --green: #00e676;
+    --highlight: #e94560;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  h1 { margin: 14px 0 2px; font-size: 1.3rem; color: #fff; text-align: center; }
+  .subtitle { font-size: 0.82rem; color: #999; margin-bottom: 10px; text-align: center; }
+  .main-container {
+    display: flex; gap: 16px; width: 97%; max-width: 1500px;
+    flex-wrap: wrap; justify-content: center; padding-bottom: 20px;
+  }
+  .svg-container {
+    background: var(--panel-bg); border-radius: 12px; padding: 10px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4); overflow-x: auto;
+  }
+  .sidebar { display: flex; flex-direction: column; gap: 10px; min-width: 250px; max-width: 300px; }
+  .panel {
+    background: var(--panel-bg); border-radius: 12px; padding: 14px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+  }
+  .panel h2 { font-size: 0.95rem; margin-bottom: 8px; color: #fff; border-bottom: 1px solid #333; padding-bottom: 5px; }
+  .status-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; font-size: 0.82rem; }
+  .status-label { color: #aaa; }
+  .status-value { font-weight: bold; font-family: 'Courier New', monospace; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; }
+  .status-high { background: #1b5e20; color: var(--green); }
+  .status-low { background: #4a1515; color: var(--highlight); }
+  .status-on { background: #1b5e20; color: var(--green); }
+  .status-off { background: #4a1515; color: #888; }
+  .btn-container { text-align: center; margin-top: 6px; }
+  .push-btn {
+    width: 72px; height: 72px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #666, #222);
+    border: 3px solid #555; color: #fff; font-size: 0.65rem; cursor: pointer;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.5), inset 0 -2px 4px rgba(0,0,0,0.3);
+    transition: all 0.1s; font-weight: bold; text-transform: uppercase;
+  }
+  .push-btn:active, .push-btn.pressed {
+    transform: scale(0.95); box-shadow: 0 2px 4px rgba(0,0,0,0.5), inset 0 2px 6px rgba(0,0,0,0.5);
+    border-color: var(--highlight);
+  }
+  .legend { font-size: 0.75rem; line-height: 1.6; }
+  .legend-item { display: flex; align-items: center; gap: 8px; }
+  .legend-swatch { width: 24px; height: 4px; border-radius: 2px; display: inline-block; }
+  .tooltip-box {
+    position: fixed; background: rgba(0,0,0,0.92); color: #fff;
+    padding: 6px 10px; border-radius: 6px; font-size: 0.75rem; pointer-events: none;
+    z-index: 1000; max-width: 240px; display: none; border: 1px solid #555; line-height: 1.4;
+  }
+  .circuit-desc { font-size: 0.78rem; color: #aaa; line-height: 1.5; }
+  .circuit-desc strong { color: #ddd; }
+  .current-display { text-align: center; margin-top: 6px; padding: 6px; background: rgba(0,0,0,0.3); border-radius: 6px; }
+  .current-value { font-size: 1.4rem; font-family: 'Courier New', monospace; color: var(--green); }
+  .current-unit { font-size: 0.75rem; color: #aaa; }
+  .pin-label { font-size: 6.5px; fill: #ccc; font-family: 'Courier New', monospace; }
+  .board-text { font-size: 5.5px; fill: #888; font-family: sans-serif; }
+  .breadboard-label { font-size: 5px; fill: #999; font-family: 'Courier New', monospace; }
+  .component-label { font-size: 6.5px; fill: #fff; font-family: sans-serif; }
+  .wire-hover { cursor: pointer; }
+  .pin-hover { cursor: pointer; }
+</style>
+</head>
+<body>
+
+<h1>ESP32-C3-DevKitM-1 — Interactive LED Circuit Dashboard</h1>
+<p class="subtitle">GPIO4 → 220Ω → LED → GND &nbsp;|&nbsp; GPIO9 (pull-up) ← pushbutton → GND</p>
+
+<div class="main-container">
+  <div class="svg-container">
+    <!-- viewBox: 1300 wide to fit board + full 30-col breadboard -->
+    <svg id="circuit-svg" viewBox="0 0 1300 680" width="1280" height="664" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <filter id="glow"><feGaussianBlur stdDeviation="2" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        <filter id="led-glow"><feGaussianBlur stdDeviation="4" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        <radialGradient id="dot-grad">
+          <stop offset="0%" stop-color="#ffeb3b" stop-opacity="1"/>
+          <stop offset="100%" stop-color="#ff9800" stop-opacity="0.6"/>
+        </radialGradient>
+      </defs>
+      <rect width="1300" height="680" fill="#1a1a2e" rx="8"/>
+
+      <!-- ============================================================ -->
+      <!-- ESP32-C3-DevKitM-1 BOARD                                     -->
+      <!-- Pinout verified against Espressif docs:                       -->
+      <!-- J1 (left):  GND,3V3,3V3,IO2,IO3,GND,RST,GND,IO0,IO1,        -->
+      <!--             IO10,GND,5V,5V,GND                                -->
+      <!-- J3 (right): GND,TX,RX,GND,IO9,IO8,GND,IO7,IO6,IO5,          -->
+      <!--             IO4,GND,IO18,IO19,GND                             -->
+      <!-- ============================================================ -->
+      <g id="devkit-board" transform="translate(20, 40)">
+        <!-- PCB body: green rectangle ~140x280 -->
+        <rect x="0" y="0" width="140" height="280" rx="4" fill="#2d5a27" stroke="#1e3d1a" stroke-width="2"/>
+
+        <!-- ESP32-C3-MINI-1 module -->
+        <rect x="20" y="12" width="100" height="62" rx="3" fill="#1a1a1a" stroke="#444" stroke-width="1"/>
+        <text x="70" y="38" text-anchor="middle" class="board-text" fill="#aaa">ESP32-C3-MINI-1</text>
+        <!-- PCB antenna area -->
+        <rect x="25" y="70" width="90" height="10" rx="2" fill="#c0a040" opacity="0.25"/>
+
+        <!-- Micro-USB connector (top center) -->
+        <rect x="48" y="-6" width="44" height="14" rx="3" fill="#777" stroke="#555" stroke-width="1"/>
+        <rect x="55" y="-3" width="30" height="9" rx="2" fill="#333"/>
+        <text x="70" y="10" text-anchor="middle" class="board-text" fill="#ccc">Micro-USB</text>
+
+        <!-- 5V Power-on LED -->
+        <circle cx="118" cy="6" r="2.5" fill="#ffeb3b" opacity="0.9"/>
+        <text x="124" y="9" class="board-text">PWR</text>
+
+        <!-- BOOT button (left edge, middle) -->
+        <rect x="4" y="138" width="20" height="12" rx="3" fill="#555" stroke="#777" stroke-width="1"/>
+        <text x="14" y="147" text-anchor="middle" class="board-text" fill="#fff" font-size="4.5">BOOT</text>
+
+        <!-- RESET button (left edge, below BOOT) -->
+        <rect x="4" y="156" width="20" height="12" rx="3" fill="#555" stroke="#777" stroke-width="1"/>
+        <text x="14" y="165" text-anchor="middle" class="board-text" fill="#fff" font-size="4.5">RST</text>
+
+        <!-- RGB LED (right side, near module) -->
+        <circle cx="128" cy="38" r="3.5" fill="#e94560" opacity="0.7"/>
+        <text x="128" y="52" text-anchor="middle" class="board-text">RGB</text>
+
+        <!-- USB-to-UART bridge chip -->
+        <rect x="22" y="98" width="28" height="18" rx="2" fill="#333" stroke="#555" stroke-width="0.5"/>
+        <text x="36" y="110" text-anchor="middle" class="board-text" font-size="4">UART</text>
+
+        <!-- LDO regulator -->
+        <rect x="88" y="78" width="14" height="10" rx="1" fill="#333" stroke="#555" stroke-width="0.5"/>
+        <text x="95" y="86" text-anchor="middle" class="board-text" font-size="4">LDO</text>
+
+        <!-- J1 Header (left side) — 15 pins, spaced 12px apart starting at y=30 -->
+        <g id="j1-header">
+          <circle cx="-4" cy="30"  r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J1-1: GND" data-info="Ground"/>
+          <text x="-12" y="33" text-anchor="end" class="pin-label">GND</text>
+          <circle cx="-4" cy="42"  r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J1-2: 3V3" data-info="3.3V power supply"/>
+          <text x="-12" y="45" text-anchor="end" class="pin-label">3V3</text>
+          <circle cx="-4" cy="54"  r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J1-3: 3V3" data-info="3.3V power supply"/>
+          <text x="-12" y="57" text-anchor="end" class="pin-label">3V3</text>
+          <circle cx="-4" cy="66"  r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J1-4: IO2" data-info="GPIO2 / ADC1_CH2 / FSPIQ (strapping pin)"/>
+          <text x="-12" y="69" text-anchor="end" class="pin-label">IO2</text>
+          <circle cx="-4" cy="78"  r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J1-5: IO3" data-info="GPIO3 / ADC1_CH3"/>
+          <text x="-12" y="81" text-anchor="end" class="pin-label">IO3</text>
+          <circle cx="-4" cy="90"  r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J1-6: GND" data-info="Ground"/>
+          <text x="-12" y="93" text-anchor="end" class="pin-label">GND</text>
+          <circle cx="-4" cy="102" r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J1-7: RST" data-info="CHIP_PU (reset/enable)"/>
+          <text x="-12" y="105" text-anchor="end" class="pin-label">RST</text>
+          <circle cx="-4" cy="114" r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J1-8: GND" data-info="Ground"/>
+          <text x="-12" y="117" text-anchor="end" class="pin-label">GND</text>
+          <circle cx="-4" cy="126" r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J1-9: IO0" data-info="GPIO0 / ADC1_CH0 / XTAL_32K_P"/>
+          <text x="-12" y="129" text-anchor="end" class="pin-label">IO0</text>
+          <circle cx="-4" cy="138" r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J1-10: IO1" data-info="GPIO1 / ADC1_CH1 / XTAL_32K_N"/>
+          <text x="-12" y="141" text-anchor="end" class="pin-label">IO1</text>
+          <circle cx="-4" cy="150" r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J1-11: IO10" data-info="GPIO10 / FSPICS0"/>
+          <text x="-12" y="153" text-anchor="end" class="pin-label">IO10</text>
+          <circle cx="-4" cy="162" r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J1-12: GND" data-info="Ground"/>
+          <text x="-12" y="165" text-anchor="end" class="pin-label">GND</text>
+          <circle cx="-4" cy="174" r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J1-13: 5V" data-info="5V power supply"/>
+          <text x="-12" y="177" text-anchor="end" class="pin-label">5V</text>
+          <circle cx="-4" cy="186" r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J1-14: 5V" data-info="5V power supply"/>
+          <text x="-12" y="189" text-anchor="end" class="pin-label">5V</text>
+          <circle cx="-4" cy="198" r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J1-15: GND" data-info="Ground"/>
+          <text x="-12" y="201" text-anchor="end" class="pin-label">GND</text>
+        </g>
+
+        <!-- J3 Header (right side) — 15 pins, spaced 12px apart starting at y=30 -->
+        <g id="j3-header">
+          <circle cx="144" cy="30"  r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J3-1: GND" data-info="Ground"/>
+          <text x="152" y="33" text-anchor="start" class="pin-label">GND</text>
+          <circle cx="144" cy="42"  r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J3-2: TX" data-info="GPIO21 / U0TXD"/>
+          <text x="152" y="45" text-anchor="start" class="pin-label">TX</text>
+          <circle cx="144" cy="54"  r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J3-3: RX" data-info="GPIO20 / U0RXD"/>
+          <text x="152" y="57" text-anchor="start" class="pin-label">RX</text>
+          <circle cx="144" cy="66"  r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J3-4: GND" data-info="Ground"/>
+          <text x="152" y="69" text-anchor="start" class="pin-label">GND</text>
+          <circle cx="144" cy="78"  r="3.5" fill="#c0a040" stroke="#e0c060" stroke-width="0.5" class="pin-hover" data-name="J3-5: IO9" data-info="GPIO9 — Pushbutton input (internal pull-up, strapping pin)"/>
+          <text x="152" y="81" text-anchor="start" class="pin-label" fill="#ffab00">IO9</text>
+          <circle cx="144" cy="90"  r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J3-6: IO8" data-info="GPIO8 / RGB LED (WS2812)"/>
+          <text x="152" y="93" text-anchor="start" class="pin-label">IO8</text>
+          <circle cx="144" cy="102" r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J3-7: GND" data-info="Ground"/>
+          <text x="152" y="105" text-anchor="start" class="pin-label">GND</text>
+          <circle cx="144" cy="114" r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J3-8: IO7" data-info="GPIO7 / FSPID / MTDO"/>
+          <text x="152" y="117" text-anchor="start" class="pin-label">IO7</text>
+          <circle cx="144" cy="126" r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J3-9: IO6" data-info="GPIO6 / FSPICLK / MTCK"/>
+          <text x="152" y="129" text-anchor="start" class="pin-label">IO6</text>
+          <circle cx="144" cy="138" r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J3-10: IO5" data-info="GPIO5 / ADC2_CH0 / FSPIWP"/>
+          <text x="152" y="141" text-anchor="start" class="pin-label">IO5</text>
+          <circle cx="144" cy="150" r="3.5" fill="#c0a040" stroke="#e0c060" stroke-width="0.5" class="pin-hover" data-name="J3-11: IO4" data-info="GPIO4 — LED output (ADC1_CH4 / FSPIHD)"/>
+          <text x="152" y="153" text-anchor="start" class="pin-label" fill="#ffab00">IO4</text>
+          <circle cx="144" cy="162" r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J3-12: GND" data-info="Ground"/>
+          <text x="152" y="165" text-anchor="start" class="pin-label">GND</text>
+          <circle cx="144" cy="174" r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J3-13: IO18" data-info="GPIO18 / USB_D-"/>
+          <text x="152" y="177" text-anchor="start" class="pin-label">IO18</text>
+          <circle cx="144" cy="186" r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J3-14: IO19" data-info="GPIO19 / USB_D+"/>
+          <text x="152" y="189" text-anchor="start" class="pin-label">IO19</text>
+          <circle cx="144" cy="198" r="3.5" fill="#888" stroke="#aaa" stroke-width="0.5" class="pin-hover" data-name="J3-15: GND" data-info="Ground"/>
+          <text x="152" y="201" text-anchor="start" class="pin-label">GND</text>
+        </g>
+
+        <!-- Board label -->
+        <text x="70" y="232" text-anchor="middle" fill="#6a9f60" font-size="7.5" font-family="sans-serif" font-weight="bold">ESP32-C3-DevKitM-1</text>
+        <text x="70" y="246" text-anchor="middle" fill="#555" font-size="4.5" font-family="sans-serif">v1 (Espressif Systems)</text>
+      </g>
+
+      <!-- ============================================================ -->
+      <!-- BREADBOARD (830 tie-points, 30 columns × 10 rows + 4 rails)  -->
+      <!-- Verified: 30 columns at 20px spacing, x=30..610              -->
+      <!-- Rows a-e: y=75,95,115 (gap), f-j: y=145,165,185,205,225     -->
+      <!-- Top power rails: + at y=32, - at y=52                        -->
+      <!-- Bottom power rails: + at y=254, - at y=274                   -->
+      <!-- ============================================================ -->
+      <g id="breadboard" transform="translate(250, 30)">
+        <!-- Breadboard body -->
+        <rect x="0" y="0" width="660" height="310" rx="6" fill="#f5f0e8" stroke="#ccc" stroke-width="2"/>
+
+        <!-- Row labels a-e (left) -->
+        <text x="4" y="78" class="breadboard-label">a</text>
+        <text x="4" y="93" class="breadboard-label">b</text>
+        <text x="4" y="108" class="breadboard-label">c</text>
+        <text x="4" y="123" class="breadboard-label">d</text>
+        <text x="4" y="138" class="breadboard-label">e</text>
+        <!-- Row labels f-j (left, below gap) -->
+        <text x="4" y="163" class="breadboard-label">f</text>
+        <text x="4" y="178" class="breadboard-label">g</text>
+        <text x="4" y="193" class="breadboard-label">h</text>
+        <text x="4" y="208" class="breadboard-label">i</text>
+        <text x="4" y="223" class="breadboard-label">j</text>
+
+        <!-- Column number labels: 1,5,10,15,20,25,30 -->
+        <!-- col N at x = 30 + (N-1)*20 -->
+        <text x="30" y="14" text-anchor="middle" class="breadboard-label">1</text>
+        <text x="110" y="14" text-anchor="middle" class="breadboard-label">5</text>
+        <text x="210" y="14" text-anchor="middle" class="breadboard-label">10</text>
+        <text x="310" y="14" text-anchor="middle" class="breadboard-label">15</text>
+        <text x="410" y="14" text-anchor="middle" class="breadboard-label">20</text>
+        <text x="510" y="14" text-anchor="middle" class="breadboard-label">25</text>
+        <text x="610" y="14" text-anchor="middle" class="breadboard-label">30</text>
+
+        <!-- Top power rail + (red) -->
+        <rect x="20" y="28" width="620" height="8" rx="1" fill="#e53935" opacity="0.25"/>
+        <text x="24" y="35" class="breadboard-label" fill="#e53935" font-weight="bold">+</text>
+        <!-- Top power rail - (blue) -->
+        <rect x="20" y="48" width="620" height="8" rx="1" fill="#1565c0" opacity="0.25"/>
+        <text x="24" y="55" class="breadboard-label" fill="#1565c0" font-weight="bold">−</text>
+
+        <!-- Center gap divider -->
+        <line x1="20" y1="148" x2="640" y2="148" stroke="#bbb" stroke-width="1.5" stroke-dasharray="4,2"/>
+
+        <!-- Bottom power rail + (red) -->
+        <rect x="20" y="250" width="620" height="8" rx="1" fill="#e53935" opacity="0.25"/>
+        <text x="24" y="257" class="breadboard-label" fill="#e53935" font-weight="bold">+</text>
+        <!-- Bottom power rail - (blue) -->
+        <rect x="20" y="270" width="620" height="8" rx="1" fill="#1565c0" opacity="0.25"/>
+        <text x="24" y="277" class="breadboard-label" fill="#1565c0" font-weight="bold">−</text>
+
+        <!-- Power rail holes (top +) — 30 holes -->
+        <g id="pr-top-plus" fill="#b71c1c">
+          <circle cx="30" cy="32" r="2.5"/><circle cx="50" cy="32" r="2.5"/>
+          <circle cx="70" cy="32" r="2.5"/><circle cx="90" cy="32" r="2.5"/>
+          <circle cx="110" cy="32" r="2.5"/><circle cx="130" cy="32" r="2.5"/>
+          <circle cx="150" cy="32" r="2.5"/><circle cx="170" cy="32" r="2.5"/>
+          <circle cx="190" cy="32" r="2.5"/><circle cx="210" cy="32" r="2.5"/>
+          <circle cx="230" cy="32" r="2.5"/><circle cx="250" cy="32" r="2.5"/>
+          <circle cx="270" cy="32" r="2.5"/><circle cx="290" cy="32" r="2.5"/>
+          <circle cx="310" cy="32" r="2.5"/><circle cx="330" cy="32" r="2.5"/>
+          <circle cx="350" cy="32" r="2.5"/><circle cx="370" cy="32" r="2.5"/>
+          <circle cx="390" cy="32" r="2.5"/><circle cx="410" cy="32" r="2.5"/>
+          <circle cx="430" cy="32" r="2.5"/><circle cx="450" cy="32" r="2.5"/>
+          <circle cx="470" cy="32" r="2.5"/><circle cx="490" cy="32" r="2.5"/>
+          <circle cx="510" cy="32" r="2.5"/><circle cx="530" cy="32" r="2.5"/>
+          <circle cx="550" cy="32" r="2.5"/><circle cx="570" cy="32" r="2.5"/>
+          <circle cx="590" cy="32" r="2.5"/><circle cx="610" cy="32" r="2.5"/>
+        </g>
+        <!-- Power rail holes (top -) -->
+        <g id="pr-top-minus" fill="#0d47a1">
+          <circle cx="30" cy="52" r="2.5"/><circle cx="50" cy="52" r="2.5"/>
+          <circle cx="70" cy="52" r="2.5"/><circle cx="90" cy="52" r="2.5"/>
+          <circle cx="110" cy="52" r="2.5"/><circle cx="130" cy="52" r="2.5"/>
+          <circle cx="150" cy="52" r="2.5"/><circle cx="170" cy="52" r="2.5"/>
+          <circle cx="190" cy="52" r="2.5"/><circle cx="210" cy="52" r="2.5"/>
+          <circle cx="230" cy="52" r="2.5"/><circle cx="250" cy="52" r="2.5"/>
+          <circle cx="270" cy="52" r="2.5"/><circle cx="290" cy="52" r="2.5"/>
+          <circle cx="310" cy="52" r="2.5"/><circle cx="330" cy="52" r="2.5"/>
+          <circle cx="350" cy="52" r="2.5"/><circle cx="370" cy="52" r="2.5"/>
+          <circle cx="390" cy="52" r="2.5"/><circle cx="410" cy="52" r="2.5"/>
+          <circle cx="430" cy="52" r="2.5"/><circle cx="450" cy="52" r="2.5"/>
+          <circle cx="470" cy="52" r="2.5"/><circle cx="490" cy="52" r="2.5"/>
+          <circle cx="510" cy="52" r="2.5"/><circle cx="530" cy="52" r="2.5"/>
+          <circle cx="550" cy="52" r="2.5"/><circle cx="570" cy="52" r="2.5"/>
+          <circle cx="590" cy="52" r="2.5"/><circle cx="610" cy="52" r="2.5"/>
+        </g>
+
+        <!-- Terminal strip: 30 columns × 10 rows (a-e, f-j), 5 holes each side of gap -->
+        <g id="terminal-strip" fill="#aaa">
+          <!-- Col 1 x=30 -->
+          <circle cx="30" cy="75" r="2.5"/><circle cx="30" cy="90" r="2.5"/><circle cx="30" cy="105" r="2.5"/><circle cx="30" cy="120" r="2.5"/><circle cx="30" cy="135" r="2.5"/>
+          <circle cx="30" cy="160" r="2.5"/><circle cx="30" cy="175" r="2.5"/><circle cx="30" cy="190" r="2.5"/><circle cx="30" cy="205" r="2.5"/><circle cx="30" cy="220" r="2.5"/>
+          <!-- Col 2 x=50 -->
+          <circle cx="50" cy="75" r="2.5"/><circle cx="50" cy="90" r="2.5"/><circle cx="50" cy="105" r="2.5"/><circle cx="50" cy="120" r="2.5"/><circle cx="50" cy="135" r="2.5"/>
+          <circle cx="50" cy="160" r="2.5"/><circle cx="50" cy="175" r="2.5"/><circle cx="50" cy="190" r="2.5"/><circle cx="50" cy="205" r="2.5"/><circle cx="50" cy="220" r="2.5"/>
+          <!-- Col 3 x=70 -->
+          <circle cx="70" cy="75" r="2.5"/><circle cx="70" cy="90" r="2.5"/><circle cx="70" cy="105" r="2.5"/><circle cx="70" cy="120" r="2.5"/><circle cx="70" cy="135" r="2.5"/>
+          <circle cx="70" cy="160" r="2.5"/><circle cx="70" cy="175" r="2.5"/><circle cx="70" cy="190" r="2.5"/><circle cx="70" cy="205" r="2.5"/><circle cx="70" cy="220" r="2.5"/>
+          <!-- Col 4 x=90 -->
+          <circle cx="90" cy="75" r="2.5"/><circle cx="90" cy="90" r="2.5"/><circle cx="90" cy="105" r="2.5"/><circle cx="90" cy="120" r="2.5"/><circle cx="90" cy="135" r="2.5"/>
+          <circle cx="90" cy="160" r="2.5"/><circle cx="90" cy="175" r="2.5"/><circle cx="90" cy="190" r="2.5"/><circle cx="90" cy="205" r="2.5"/><circle cx="90" cy="220" r="2.5"/>
+          <!-- Col 5 x=110 -->
+          <circle cx="110" cy="75" r="2.5"/><circle cx="110" cy="90" r="2.5"/><circle cx="110" cy="105" r="2.5"/><circle cx="110" cy="120" r="2.5"/><circle cx="110" cy="135" r="2.5"/>
+          <circle cx="110" cy="160" r="2.5"/><circle cx="110" cy="175" r="2.5"/><circle cx="110" cy="190" r="2.5"/><circle cx="110" cy="205" r="2.5"/><circle cx="110" cy="220" r="2.5"/>
+          <!-- Col 6 x=130 -->
+          <circle cx="130" cy="75" r="2.5"/><circle cx="130" cy="90" r="2.5"/><circle cx="130" cy="105" r="2.5"/><circle cx="130" cy="120" r="2.5"/><circle cx="130" cy="135" r="2.5"/>
+          <circle cx="130" cy="160" r="2.5"/><circle cx="130" cy="175" r="2.5"/><circle cx="130" cy="190" r="2.5"/><circle cx="130" cy="205" r="2.5"/><circle cx="130" cy="220" r="2.5"/>
+          <!-- Col 7 x=150 -->
+          <circle cx="150" cy="75" r="2.5"/><circle cx="150" cy="90" r="2.5"/><circle cx="150" cy="105" r="2.5"/><circle cx="150" cy="120" r="2.5"/><circle cx="150" cy="135" r="2.5"/>
+          <circle cx="150" cy="160" r="2.5"/><circle cx="150" cy="175" r="2.5"/><circle cx="150" cy="190" r="2.5"/><circle cx="150" cy="205" r="2.5"/><circle cx="150" cy="220" r="2.5"/>
+          <!-- Col 8 x=170 -->
+          <circle cx="170" cy="75" r="2.5"/><circle cx="170" cy="90" r="2.5"/><circle cx="170" cy="105" r="2.5"/><circle cx="170" cy="120" r="2.5"/><circle cx="170" cy="135" r="2.5"/>
+          <circle cx="170" cy="160" r="2.5"/><circle cx="170" cy="175" r="2.5"/><circle cx="170" cy="190" r="2.5"/><circle cx="170" cy="205" r="2.5"/><circle cx="170" cy="220" r="2.5"/>
+          <!-- Col 9 x=190 -->
+          <circle cx="190" cy="75" r="2.5"/><circle cx="190" cy="90" r="2.5"/><circle cx="190" cy="105" r="2.5"/><circle cx="190" cy="120" r="2.5"/><circle cx="190" cy="135" r="2.5"/>
+          <circle cx="190" cy="160" r="2.5"/><circle cx="190" cy="175" r="2.5"/><circle cx="190" cy="190" r="2.5"/><circle cx="190" cy="205" r="2.5"/><circle cx="190" cy="220" r="2.5"/>
+          <!-- Col 10 x=210 -->
+          <circle cx="210" cy="75" r="2.5"/><circle cx="210" cy="90" r="2.5"/><circle cx="210" cy="105" r="2.5"/><circle cx="210" cy="120" r="2.5"/><circle cx="210" cy="135" r="2.5"/>
+          <circle cx="210" cy="160" r="2.5"/><circle cx="210" cy="175" r="2.5"/><circle cx="210" cy="190" r="2.5"/><circle cx="210" cy="205" r="2.5"/><circle cx="210" cy="220" r="2.5"/>
+          <!-- Col 11 x=230 -->
+          <circle cx="230" cy="75" r="2.5"/><circle cx="230" cy="90" r="2.5"/><circle cx="230" cy="105" r="2.5"/><circle cx="230" cy="120" r="2.5"/><circle cx="230" cy="135" r="2.5"/>
+          <circle cx="230" cy="160" r="2.5"/><circle cx="230" cy="175" r="2.5"/><circle cx="230" cy="190" r="2.5"/><circle cx="230" cy="205" r="2.5"/><circle cx="230" cy="220" r="2.5"/>
+          <!-- Col 12 x=250 -->
+          <circle cx="250" cy="75" r="2.5"/><circle cx="250" cy="90" r="2.5"/><circle cx="250" cy="105" r="2.5"/><circle cx="250" cy="120" r="2.5"/><circle cx="250" cy="135" r="2.5"/>
+          <circle cx="250" cy="160" r="2.5"/><circle cx="250" cy="175" r="2.5"/><circle cx="250" cy="190" r="2.5"/><circle cx="250" cy="205" r="2.5"/><circle cx="250" cy="220" r="2.5"/>
+          <!-- Col 13 x=270 -->
+          <circle cx="270" cy="75" r="2.5"/><circle cx="270" cy="90" r="2.5"/><circle cx="270" cy="105" r="2.5"/><circle cx="270" cy="120" r="2.5"/><circle cx="270" cy="135" r="2.5"/>
+          <circle cx="270" cy="160" r="2.5"/><circle cx="270" cy="175" r="2.5"/><circle cx="270" cy="190" r="2.5"/><circle cx="270" cy="205" r="2.5"/><circle cx="270" cy="220" r="2.5"/>
+          <!-- Col 14 x=290 -->
+          <circle cx="290" cy="75" r="2.5"/><circle cx="290" cy="90" r="2.5"/><circle cx="290" cy="105" r="2.5"/><circle cx="290" cy="120" r="2.5"/><circle cx="290" cy="135" r="2.5"/>
+          <circle cx="290" cy="160" r="2.5"/><circle cx="290" cy="175" r="2.5"/><circle cx="290" cy="190" r="2.5"/><circle cx="290" cy="205" r="2.5"/><circle cx="290" cy="220" r="2.5"/>
+          <!-- Col 15 x=310 -->
+          <circle cx="310" cy="75" r="2.5"/><circle cx="310" cy="90" r="2.5"/><circle cx="310" cy="105" r="2.5"/><circle cx="310" cy="120" r="2.5"/><circle cx="310" cy="135" r="2.5"/>
+          <circle cx="310" cy="160" r="2.5"/><circle cx="310" cy="175" r="2.5"/><circle cx="310" cy="190" r="2.5"/><circle cx="310" cy="205" r="2.5"/><circle cx="310" cy="220" r="2.5"/>
+          <!-- Col 16 x=330 -->
+          <circle cx="330" cy="75" r="2.5"/><circle cx="330" cy="90" r="2.5"/><circle cx="330" cy="105" r="2.5"/><circle cx="330" cy="120" r="2.5"/><circle cx="330" cy="135" r="2.5"/>
+          <circle cx="330" cy="160" r="2.5"/><circle cx="330" cy="175" r="2.5"/><circle cx="330" cy="190" r="2.5"/><circle cx="330" cy="205" r="2.5"/><circle cx="330" cy="220" r="2.5"/>
+          <!-- Col 17 x=350 -->
+          <circle cx="350" cy="75" r="2.5"/><circle cx="350" cy="90" r="2.5"/><circle cx="350" cy="105" r="2.5"/><circle cx="350" cy="120" r="2.5"/><circle cx="350" cy="135" r="2.5"/>
+          <circle cx="350" cy="160" r="2.5"/><circle cx="350" cy="175" r="2.5"/><circle cx="350" cy="190" r="2.5"/><circle cx="350" cy="205" r="2.5"/><circle cx="350" cy="220" r="2.5"/>
+          <!-- Col 18 x=370 -->
+          <circle cx="370" cy="75" r="2.5"/><circle cx="370" cy="90" r="2.5"/><circle cx="370" cy="105" r="2.5"/><circle cx="370" cy="120" r="2.5"/><circle cx="370" cy="135" r="2.5"/>
+          <circle cx="370" cy="160" r="2.5"/><circle cx="370" cy="175" r="2.5"/><circle cx="370" cy="190" r="2.5"/><circle cx="370" cy="205" r="2.5"/><circle cx="370" cy="220" r="2.5"/>
+          <!-- Col 19 x=390 -->
+          <circle cx="390" cy="75" r="2.5"/><circle cx="390" cy="90" r="2.5"/><circle cx="390" cy="105" r="2.5"/><circle cx="390" cy="120" r="2.5"/><circle cx="390" cy="135" r="2.5"/>
+          <circle cx="390" cy="160" r="2.5"/><circle cx="390" cy="175" r="2.5"/><circle cx="390" cy="190" r="2.5"/><circle cx="390" cy="205" r="2.5"/><circle cx="390" cy="220" r="2.5"/>
+          <!-- Col 20 x=410 -->
+          <circle cx="410" cy="75" r="2.5"/><circle cx="410" cy="90" r="2.5"/><circle cx="410" cy="105" r="2.5"/><circle cx="410" cy="120" r="2.5"/><circle cx="410" cy="135" r="2.5"/>
+          <circle cx="410" cy="160" r="2.5"/><circle cx="410" cy="175" r="2.5"/><circle cx="410" cy="190" r="2.5"/><circle cx="410" cy="205" r="2.5"/><circle cx="410" cy="220" r="2.5"/>
+          <!-- Col 21 x=430 -->
+          <circle cx="430" cy="75" r="2.5"/><circle cx="430" cy="90" r="2.5"/><circle cx="430" cy="105" r="2.5"/><circle cx="430" cy="120" r="2.5"/><circle cx="430" cy="135" r="2.5"/>
+          <circle cx="430" cy="160" r="2.5"/><circle cx="430" cy="175" r="2.5"/><circle cx="430" cy="190" r="2.5"/><circle cx="430" cy="205" r="2.5"/><circle cx="430" cy="220" r="2.5"/>
+          <!-- Col 22 x=450 -->
+          <circle cx="450" cy="75" r="2.5"/><circle cx="450" cy="90" r="2.5"/><circle cx="450" cy="105" r="2.5"/><circle cx="450" cy="120" r="2.5"/><circle cx="450" cy="135" r="2.5"/>
+          <circle cx="450" cy="160" r="2.5"/><circle cx="450" cy="175" r="2.5"/><circle cx="450" cy="190" r="2.5"/><circle cx="450" cy="205" r="2.5"/><circle cx="450" cy="220" r="2.5"/>
+          <!-- Col 23 x=470 -->
+          <circle cx="470" cy="75" r="2.5"/><circle cx="470" cy="90" r="2.5"/><circle cx="470" cy="105" r="2.5"/><circle cx="470" cy="120" r="2.5"/><circle cx="470" cy="135" r="2.5"/>
+          <circle cx="470" cy="160" r="2.5"/><circle cx="470" cy="175" r="2.5"/><circle cx="470" cy="190" r="2.5"/><circle cx="470" cy="205" r="2.5"/><circle cx="470" cy="220" r="2.5"/>
+          <!-- Col 24 x=490 -->
+          <circle cx="490" cy="75" r="2.5"/><circle cx="490" cy="90" r="2.5"/><circle cx="490" cy="105" r="2.5"/><circle cx="490" cy="120" r="2.5"/><circle cx="490" cy="135" r="2.5"/>
+          <circle cx="490" cy="160" r="2.5"/><circle cx="490" cy="175" r="2.5"/><circle cx="490" cy="190" r="2.5"/><circle cx="490" cy="205" r="2.5"/><circle cx="490" cy="220" r="2.5"/>
+          <!-- Col 25 x=510 -->
+          <circle cx="510" cy="75" r="2.5"/><circle cx="510" cy="90" r="2.5"/><circle cx="510" cy="105" r="2.5"/><circle cx="510" cy="120" r="2.5"/><circle cx="510" cy="135" r="2.5"/>
+          <circle cx="510" cy="160" r="2.5"/><circle cx="510" cy="175" r="2.5"/><circle cx="510" cy="190" r="2.5"/><circle cx="510" cy="205" r="2.5"/><circle cx="510" cy="220" r="2.5"/>
+          <!-- Col 26 x=530 -->
+          <circle cx="530" cy="75" r="2.5"/><circle cx="530" cy="90" r="2.5"/><circle cx="530" cy="105" r="2.5"/><circle cx="530" cy="120" r="2.5"/><circle cx="530" cy="135" r="2.5"/>
+          <circle cx="530" cy="160" r="2.5"/><circle cx="530" cy="175" r="2.5"/><circle cx="530" cy="190" r="2.5"/><circle cx="530" cy="205" r="2.5"/><circle cx="530" cy="220" r="2.5"/>
+          <!-- Col 27 x=550 -->
+          <circle cx="550" cy="75" r="2.5"/><circle cx="550" cy="90" r="2.5"/><circle cx="550" cy="105" r="2.5"/><circle cx="550" cy="120" r="2.5"/><circle cx="550" cy="135" r="2.5"/>
+          <circle cx="550" cy="160" r="2.5"/><circle cx="550" cy="175" r="2.5"/><circle cx="550" cy="190" r="2.5"/><circle cx="550" cy="205" r="2.5"/><circle cx="550" cy="220" r="2.5"/>
+          <!-- Col 28 x=570 -->
+          <circle cx="570" cy="75" r="2.5"/><circle cx="570" cy="90" r="2.5"/><circle cx="570" cy="105" r="2.5"/><circle cx="570" cy="120" r="2.5"/><circle cx="570" cy="135" r="2.5"/>
+          <circle cx="570" cy="160" r="2.5"/><circle cx="570" cy="175" r="2.5"/><circle cx="570" cy="190" r="2.5"/><circle cx="570" cy="205" r="2.5"/><circle cx="570" cy="220" r="2.5"/>
+          <!-- Col 29 x=590 -->
+          <circle cx="590" cy="75" r="2.5"/><circle cx="590" cy="90" r="2.5"/><circle cx="590" cy="105" r="2.5"/><circle cx="590" cy="120" r="2.5"/><circle cx="590" cy="135" r="2.5"/>
+          <circle cx="590" cy="160" r="2.5"/><circle cx="590" cy="175" r="2.5"/><circle cx="590" cy="190" r="2.5"/><circle cx="590" cy="205" r="2.5"/><circle cx="590" cy="220" r="2.5"/>
+          <!-- Col 30 x=610 -->
+          <circle cx="610" cy="75" r="2.5"/><circle cx="610" cy="90" r="2.5"/><circle cx="610" cy="105" r="2.5"/><circle cx="610" cy="120" r="2.5"/><circle cx="610" cy="135" r="2.5"/>
+          <circle cx="610" cy="160" r="2.5"/><circle cx="610" cy="175" r="2.5"/><circle cx="610" cy="190" r="2.5"/><circle cx="610" cy="205" r="2.5"/><circle cx="610" cy="220" r="2.5"/>
+        </g>
+
+        <!-- Bottom power rail holes -->
+        <g id="pr-bot-plus" fill="#b71c1c">
+          <circle cx="30" cy="254" r="2.5"/><circle cx="50" cy="254" r="2.5"/>
+          <circle cx="70" cy="254" r="2.5"/><circle cx="90" cy="254" r="2.5"/>
+          <circle cx="110" cy="254" r="2.5"/><circle cx="130" cy="254" r="2.5"/>
+          <circle cx="150" cy="254" r="2.5"/><circle cx="170" cy="254" r="2.5"/>
+          <circle cx="190" cy="254" r="2.5"/><circle cx="210" cy="254" r="2.5"/>
+          <circle cx="230" cy="254" r="2.5"/><circle cx="250" cy="254" r="2.5"/>
+          <circle cx="270" cy="254" r="2.5"/><circle cx="290" cy="254" r="2.5"/>
+          <circle cx="310" cy="254" r="2.5"/><circle cx="330" cy="254" r="2.5"/>
+          <circle cx="350" cy="254" r="2.5"/><circle cx="370" cy="254" r="2.5"/>
+          <circle cx="390" cy="254" r="2.5"/><circle cx="410" cy="254" r="2.5"/>
+          <circle cx="430" cy="254" r="2.5"/><circle cx="450" cy="254" r="2.5"/>
+          <circle cx="470" cy="254" r="2.5"/><circle cx="490" cy="254" r="2.5"/>
+          <circle cx="510" cy="254" r="2.5"/><circle cx="530" cy="254" r="2.5"/>
+          <circle cx="550" cy="254" r="2.5"/><circle cx="570" cy="254" r="2.5"/>
+          <circle cx="590" cy="254" r="2.5"/><circle cx="610" cy="254" r="2.5"/>
+        </g>
+        <g id="pr-bot-minus" fill="#0d47a1">
+          <circle cx="30" cy="274" r="2.5"/><circle cx="50" cy="274" r="2.5"/>
+          <circle cx="70" cy="274" r="2.5"/><circle cx="90" cy="274" r="2.5"/>
+          <circle cx="110" cy="274" r="2.5"/><circle cx="130" cy="274" r="2.5"/>
+          <circle cx="150" cy="274" r="2.5"/><circle cx="170" cy="274" r="2.5"/>
+          <circle cx="190" cy="274" r="2.5"/><circle cx="210" cy="274" r="2.5"/>
+          <circle cx="230" cy="274" r="2.5"/><circle cx="250" cy="274" r="2.5"/>
+          <circle cx="270" cy="274" r="2.5"/><circle cx="290" cy="274" r="2.5"/>
+          <circle cx="310" cy="274" r="2.5"/><circle cx="330" cy="274" r="2.5"/>
+          <circle cx="350" cy="274" r="2.5"/><circle cx="370" cy="274" r="2.5"/>
+          <circle cx="390" cy="274" r="2.5"/><circle cx="410" cy="274" r="2.5"/>
+          <circle cx="430" cy="274" r="2.5"/><circle cx="450" cy="274" r="2.5"/>
+          <circle cx="470" cy="274" r="2.5"/><circle cx="490" cy="274" r="2.5"/>
+          <circle cx="510" cy="274" r="2.5"/><circle cx="530" cy="274" r="2.5"/>
+          <circle cx="550" cy="274" r="2.5"/><circle cx="570" cy="274" r="2.5"/>
+          <circle cx="590" cy="274" r="2.5"/><circle cx="610" cy="274" r="2.5"/>
+        </g>
+
+        <!-- Breadboard label -->
+        <text x="330" y="300" text-anchor="middle" fill="#bbb" font-size="7" font-family="sans-serif">Full-Size Breadboard — 830 Tie Points</text>
+      </g>
+
+      <!-- ============================================================ -->
+      <!-- WIRES                                                        -->
+      <!-- Global coords: board at (20,40), breadboard at (250,30)     -->
+      <!-- J1-2 (3V3):  global (16, 82)                                 -->
+      <!-- J1-1 (GND):  global (16, 70)                                 -->
+      <!-- J3-5 (IO9):  global (164, 118)                               -->
+      <!-- J3-11(IO4):  global (164, 190)                               -->
+      <!-- BB top + rail col5: global (360, 62)                          -->
+      <!-- BB top - rail col5: global (360, 82)                          -->
+      <!-- BB col10 row a: global (460, 105)                             -->
+      <!-- BB col10 row d: global (460, 150)                             -->
+      <!-- BB col10 - rail bot: global (460, 304)                        -->
+      <!-- BB col20 row a: global (660, 105)                             -->
+      <!-- BB col20 row g: global (660, 205)                             -->
+      <!-- BB col20 - rail bot: global (660, 304)                        -->
+      <!-- ============================================================ -->
+      <g id="wires">
+        <!-- 3V3 wire: J1-2 → top + rail col5 -->
+        <path id="wire-3v3" d="M 16 82 L 16 62 L 360 62" fill="none" stroke="#e53935" stroke-width="2.5" class="wire-hover" data-name="3V3 Power Wire" data-info="J1-2 (3V3) → breadboard top + rail, column 5"/>
+        <!-- GND wire: J1-1 → top - rail col5 -->
+        <path id="wire-gnd" d="M 16 70 L 16 82 L 360 82" fill="none" stroke="#424242" stroke-width="2.5" class="wire-hover" data-name="GND Wire" data-info="J1-1 (GND) → breadboard top − rail, column 5"/>
+
+        <!-- GPIO4 wire: J3-11 → col10 row a (to resistor) -->
+        <path id="wire-gpio4" d="M 164 190 L 164 105 L 460 105" fill="none" stroke="#ffab00" stroke-width="2.5" class="wire-hover" data-name="GPIO4 Signal Wire" data-info="J3-11 (GPIO4) → breadboard col 10 row a → resistor"/>
+        <!-- GPIO9 wire: J3-5 → col20 row a (to pushbutton) -->
+        <path id="wire-gpio9" d="M 164 118 L 164 105 L 660 105" fill="none" stroke="#ffab00" stroke-width="2.5" class="wire-hover" data-name="GPIO9 Signal Wire" data-info="J3-5 (GPIO9) → breadboard col 20 row a → pushbutton"/>
+
+        <!-- Pushbutton bottom → GND rail wire -->
+        <path id="wire-btn-gnd" d="M 660 205 L 660 304" fill="none" stroke="#424242" stroke-width="2.5" class="wire-hover" data-name="Button GND Wire" data-info="Pushbutton bottom terminal (row g) → breadboard − rail"/>
+        <!-- LED cathode → GND rail wire -->
+        <path id="wire-led-gnd" d="M 460 150 L 460 304" fill="none" stroke="#424242" stroke-width="2.5" class="wire-hover" data-name="LED GND Wire" data-info="LED cathode (row d) → breadboard − rail"/>
+
+        <!-- Current flow animation path: GPIO4 → resistor → LED → - rail → GND wire → GND pin -->
+        <path id="current-path" d="M 164 190 L 164 105 L 460 105 L 460 85 L 460 105 L 460 125 L 460 150 L 460 304 L 360 304 L 360 82 L 16 82" fill="none" stroke="transparent"/>
+      </g>
+
+      <!-- ============================================================ -->
+      <!-- COMPONENTS                                                   -->
+      <!-- ============================================================ -->
+      <g id="components">
+
+        <!-- RESISTOR 220Ω: between GPIO4 wire and LED, at col10 rows a-b area -->
+        <g id="resistor" class="component-hover" data-name="220Ω Resistor" data-info="Red-Red-Brown-Gold bands. Limits LED current: I=(3.3V−2.0V)/220Ω≈5.9mA">
+          <!-- Resistor leads -->
+          <line x1="460" y1="85" x2="460" y2="90" stroke="#aaa" stroke-width="1.5"/>
+          <line x1="460" y1="118" x2="460" y2="123" stroke="#aaa" stroke-width="1.5"/>
+          <!-- Resistor body (beige cylinder) -->
+          <rect x="452" y="90" width="16" height="28" rx="3" fill="#f5deb3" stroke="#d4a76a" stroke-width="0.8"/>
+          <!-- Color bands (left to right: Red=2, Red=2, Brown=×10, Gold=±5%) -->
+          <rect x="454" y="94" width="3" height="20" rx="0.5" fill="#c62828"/>
+          <rect x="459" y="94" width="3" height="20" rx="0.5" fill="#c62828"/>
+          <rect x="464" y="94" width="3" height="20" rx="0.5" fill="#795548"/>
+          <rect x="467" y="94" width="2" height="20" rx="0.5" fill="#fbc02d"/>
+          <!-- Label -->
+          <text x="476" y="106" class="component-label">220Ω</text>
+        </g>
+
+        <!-- LED: between resistor and GND wire, at col10 rows c-d area -->
+        <g id="led-component" class="component-hover" data-name="Red LED" data-info="Anode→resistor→GPIO4, Cathode→GND. Vf≈2.0V. Click to toggle GPIO4 HIGH/LOW." style="cursor:pointer">
+          <!-- LED leads -->
+          <line x1="460" y1="123" x2="460" y2="128" stroke="#aaa" stroke-width="1.5"/>
+          <line x1="460" y1="148" x2="460" y2="150" stroke="#aaa" stroke-width="1.5"/>
+          <!-- LED body: triangle pointing down (anode top, cathode bottom) -->
+          <polygon points="460,128 449,148 471,148" fill="#ff5722" opacity="0.8" stroke="#fff" stroke-width="1"/>
+          <!-- Cathode flat bar -->
+          <line x1="447" y1="148" x2="473" y2="148" stroke="#fff" stroke-width="2"/>
+          <!-- Light emission arrows -->
+          <line x1="475" y1="136" x2="483" y2="129" stroke="#ffeb3b" stroke-width="1.2"/>
+          <polygon points="483,129 479,131 481,135" fill="#ffeb3b"/>
+          <line x1="476" y1="142" x2="484" y2="135" stroke="#ffeb3b" stroke-width="1.2"/>
+          <polygon points="484,135 480,137 482,141" fill="#ffeb3b"/>
+          <!-- Glow effect (toggled by JS) -->
+          <circle id="led-glow-circle" cx="460" cy="138" r="14" fill="#ff5722" opacity="0" filter="url(#led-glow)"/>
+          <!-- Polarity labels -->
+          <text x="486" y="131" class="component-label" fill="#aaa" font-size="5.5">anode</text>
+          <text x="486" y="150" class="component-label" fill="#aaa" font-size="5.5">cathode (flat)</text>
+        </g>
+
+        <!-- PUSHBUTTON SWITCH: spans center gap at col20, rows c-g -->
+        <g id="pushbutton" class="component-hover" data-name="Pushbutton Switch" data-info="Normally open. Top→GPIO9 (row a), Bottom→GND (row g). Internal pull-up on GPIO9. Click to toggle." style="cursor:pointer">
+          <!-- Button body spanning gap -->
+          <rect x="648" y="125" width="24" height="30" rx="4" fill="#e0e0e0" stroke="#999" stroke-width="1.5"/>
+          <!-- Actuator dome -->
+          <ellipse id="btn-actuator" cx="660" cy="133" rx="10" ry="5" fill="#bbb" stroke="#888" stroke-width="1"/>
+          <!-- Contact dots -->
+          <circle cx="654" cy="140" r="2" fill="#666"/>
+          <circle cx="666" cy="140" r="2" fill="#666"/>
+          <!-- Connection points on breadboard -->
+          <circle cx="660" cy="105" r="4" fill="#c0a040" stroke="#e0c060" stroke-width="1"/>
+          <circle cx="660" cy="205" r="4" fill="#0d47a1" stroke="#42a5f5" stroke-width="1"/>
+          <!-- Label -->
+          <text x="680" y="138" class="component-label">SW</text>
+          <text x="680" y="147" class="component-label" fill="#aaa">(click me)</text>
+        </g>
+
+      </g>
+
+      <!-- ============================================================ -->
+      <!-- CURRENT FLOW ANIMATION DOTS                                  -->
+      <!-- ============================================================ -->
+      <g id="current-dots" opacity="0">
+        <circle r="3" fill="url(#dot-grad)" filter="url(#glow)">
+          <animateMotion dur="2.5s" repeatCount="indefinite" rotate="auto"><mpath href="#current-path"/></animateMotion>
+        </circle>
+        <circle r="3" fill="url(#dot-grad)" filter="url(#glow)">
+          <animateMotion dur="2.5s" begin="0.36s" repeatCount="indefinite" rotate="auto"><mpath href="#current-path"/></animateMotion>
+        </circle>
+        <circle r="3" fill="url(#dot-grad)" filter="url(#glow)">
+          <animateMotion dur="2.5s" begin="0.71s" repeatCount="indefinite" rotate="auto"><mpath href="#current-path"/></animateMotion>
+        </circle>
+        <circle r="3" fill="url(#dot-grad)" filter="url(#glow)">
+          <animateMotion dur="2.5s" begin="1.07s" repeatCount="indefinite" rotate="auto"><mpath href="#current-path"/></animateMotion>
+        </circle>
+        <circle r="3" fill="url(#dot-grad)" filter="url(#glow)">
+          <animateMotion dur="2.5s" begin="1.43s" repeatCount="indefinite" rotate="auto"><mpath href="#current-path"/></animateMotion>
+        </circle>
+        <circle r="3" fill="url(#dot-grad)" filter="url(#glow)">
+          <animateMotion dur="2.5s" begin="1.79s" repeatCount="indefinite" rotate="auto"><mpath href="#current-path"/></animateMotion>
+        </circle>
+        <circle r="3" fill="url(#dot-grad)" filter="url(#glow)">
+          <animateMotion dur="2.5s" begin="2.14s" repeatCount="indefinite" rotate="auto"><mpath href="#current-path"/></animateMotion>
+        </circle>
+      </g>
+
+      <!-- ============================================================ -->
+      <!-- CONNECTION POINT HIGHLIGHTS                                  -->
+      <!-- ============================================================ -->
+      <g id="connection-points">
+        <!-- 3V3 connection: col5, top + rail -->
+        <circle cx="360" cy="62" r="5" fill="none" stroke="#e53935" stroke-width="1.5" class="pin-hover" data-name="+ Rail (Col 5)" data-info="3V3 from DevKit feeds this entire + rail"/>
+        <!-- GND connection: col5, top - rail -->
+        <circle cx="360" cy="82" r="5" fill="none" stroke="#777" stroke-width="1.5" class="pin-hover" data-name="− Rail (Col 5)" data-info="GND from DevKit feeds this entire − rail"/>
+        <!-- GPIO4 → col10 row a -->
+        <circle cx="460" cy="105" r="5" fill="none" stroke="#ffab00" stroke-width="1.5" class="pin-hover" data-name="Col 10 Row a" data-info="GPIO4 signal enters here → resistor"/>
+        <!-- LED cathode → - rail col10 -->
+        <circle cx="460" cy="304" r="5" fill="none" stroke="#777" stroke-width="1.5" class="pin-hover" data-name="− Rail (Col 10)" data-info="LED cathode connects to GND rail here"/>
+        <!-- GPIO9 → col20 row a -->
+        <circle cx="660" cy="105" r="5" fill="none" stroke="#ffab00" stroke-width="1.5" class="pin-hover" data-name="Col 20 Row a" data-info="GPIO9 signal to pushbutton top terminal"/>
+        <!-- Button bottom → - rail col20 -->
+        <circle cx="660" cy="304" r="5" fill="none" stroke="#777" stroke-width="1.5" class="pin-hover" data-name="− Rail (Col 20)" data-info="Pushbutton bottom terminal → GND rail"/>
+      </g>
+
+    </svg>
+  </div>
+
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="panel">
+      <h2>⚡ Live Circuit Status</h2>
+      <div class="status-row"><span class="status-label">GPIO4 (LED Output)</span><span id="gpio4-status" class="status-value status-high">HIGH (3.3V)</span></div>
+      <div class="status-row"><span class="status-label">GPIO9 (Button Input)</span><span id="gpio9-status" class="status-value status-high">HIGH (pulled up)</span></div>
+      <div class="status-row"><span class="status-label">LED Circuit</span><span id="led-status" class="status-value status-on">ON</span></div>
+      <div class="status-row"><span class="status-label">Pushbutton</span><span id="btn-status" class="status-value status-off">Released</span></div>
+      <div class="current-display">
+        <div class="current-value" id="current-val">5.9</div>
+        <div class="current-unit">mA (through LED)</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>🔘 Pushbutton Control</h2>
+      <p style="font-size:0.75rem;color:#aaa;margin-bottom:6px;">Click the button or press Spacebar to simulate pressing the pushbutton on GPIO9.</p>
+      <div class="btn-container">
+        <button class="push-btn" id="push-button" onclick="toggleButton()">PRESS</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>🔴 LED Control</h2>
+      <p style="font-size:0.75rem;color:#aaa;margin-bottom:6px;">Click the LED on the breadboard (or below) to toggle GPIO4 HIGH/LOW.</p>
+      <div class="btn-container">
+        <button class="push-btn" id="led-button" onclick="toggleLed()" style="background:radial-gradient(circle at 35% 35%,#ff5722,#b71c1c);border-color:#ff5722;">LED</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>📐 Circuit Description</h2>
+      <div class="circuit-desc">
+        <p><strong>Power:</strong> J1-2 (3V3) → breadboard + rail (red)</p>
+        <p style="margin-top:3px"><strong>GND:</strong> J1-1 (GND) → breadboard − rail (blue/black)</p>
+        <p style="margin-top:3px"><strong>LED Circuit:</strong></p>
+        <p style="margin-left:6px">GPIO4 HIGH (3.3V) → 220Ω resistor → LED anode</p>
+        <p style="margin-left:6px">LED cathode (flat side) → GND rail</p>
+        <p style="margin-top:3px"><strong>Button Circuit:</strong></p>
+        <p style="margin-left:6px">GPIO9 (internal pull-up) → pushbutton → GND</p>
+        <p style="margin-top:3px"><strong>LED Current:</strong> I = (3.3V − 2.0V<sub>F</sub>) / 220Ω ≈ 5.9mA</p>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>🎨 Wire Color Legend</h2>
+      <div class="legend">
+        <div class="legend-item"><span class="legend-swatch" style="background:#e53935"></span> Power (3V3)</div>
+        <div class="legend-item"><span class="legend-swatch" style="background:#424242"></span> Ground (GND)</div>
+        <div class="legend-item"><span class="legend-swatch" style="background:#ffab00"></span> Signal (GPIO)</div>
+        <div class="legend-item"><span class="legend-swatch" style="background:#ffeb3b;border-radius:50%;width:8px;height:8px"></span> Current flow dots</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>📋 Active Pins Reference</h2>
+      <div style="font-size:0.72rem;line-height:1.6;color:#aaa;">
+        <p><strong style="color:#ffab00">J3-11 (IO4)</strong> — LED output driver</p>
+        <p><strong style="color:#ffab00">J3-5 (IO9)</strong> — Button input (pull-up)</p>
+        <p><strong style="color:#e53935">J1-2 (3V3)</strong> — Power to + rail</p>
+        <p><strong style="color:#888">J1-1 (GND)</strong> — Ground to − rail</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="tooltip" class="tooltip-box"></div>
+
+<script>
+  let buttonPressed = false;
+  let ledOn = true;
+
+  const tooltip = document.getElementById('tooltip');
+  const currentDots = document.getElementById('current-dots');
+  const ledGlow = document.getElementById('led-glow-circle');
+  const btnActuator = document.getElementById('btn-actuator');
+  const pushBtn = document.getElementById('push-button');
+  const ledBtn = document.getElementById('led-button');
+
+  // Tooltip
+  document.querySelectorAll('.pin-hover, .wire-hover, .component-hover').forEach(el => {
+    el.addEventListener('mouseenter', (e) => {
+      tooltip.innerHTML = '<strong>' + (el.dataset.name || '') + '</strong><br>' + (el.dataset.info || '');
+      tooltip.style.display = 'block';
+    });
+    el.addEventListener('mousemove', (e) => {
+      tooltip.style.left = (e.clientX + 12) + 'px';
+      tooltip.style.top = (e.clientY - 10) + 'px';
+    });
+    el.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+  });
+
+  function toggleButton() {
+    buttonPressed = !buttonPressed;
+    updateDisplay();
+  }
+
+  function toggleLed() {
+    ledOn = !ledOn;
+    updateDisplay();
+  }
+
+  function updateDisplay() {
+    const gpio9Status = document.getElementById('gpio9-status');
+    const btnStatus = document.getElementById('btn-status');
+    const currentVal = document.getElementById('current-val');
+
+    if (buttonPressed) {
+      gpio9Status.textContent = 'LOW (0V — pressed)';
+      gpio9Status.className = 'status-value status-low';
+      btnStatus.textContent = 'Pressed';
+      btnStatus.className = 'status-value status-on';
+      pushBtn.classList.add('pressed');
+      btnActuator.setAttribute('cy', '137');
+      btnActuator.setAttribute('fill', '#999');
+    } else {
+      gpio9Status.textContent = 'HIGH (pulled up)';
+      gpio9Status.className = 'status-value status-high';
+      btnStatus.textContent = 'Released';
+      btnStatus.className = 'status-value status-off';
+      pushBtn.classList.remove('pressed');
+      btnActuator.setAttribute('cy', '133');
+      btnActuator.setAttribute('fill', '#bbb');
+    }
+
+    const gpio4Status = document.getElementById('gpio4-status');
+    const ledStatus = document.getElementById('led-status');
+
+    if (ledOn) {
+      gpio4Status.textContent = 'HIGH (3.3V)';
+      gpio4Status.className = 'status-value status-high';
+      ledStatus.textContent = 'ON';
+      ledStatus.className = 'status-value status-on';
+      currentDots.setAttribute('opacity', '1');
+      ledGlow.setAttribute('opacity', '0.6');
+      currentVal.textContent = '5.9';
+      currentVal.style.color = '#00e676';
+      ledBtn.style.borderColor = '#ff5722';
+    } else {
+      gpio4Status.textContent = 'LOW (0V)';
+      gpio4Status.className = 'status-value status-low';
+      ledStatus.textContent = 'OFF';
+      ledStatus.className = 'status-value status-off';
+      currentDots.setAttribute('opacity', '0');
+      ledGlow.setAttribute('opacity', '0');
+      currentVal.textContent = '0.0';
+      currentVal.style.color = '#888';
+      ledBtn.style.borderColor = '#555';
+    }
+  }
+
+  // Click LED component to toggle
+  document.getElementById('led-component').addEventListener('click', toggleLed);
+
+  // Spacebar for button
+  document.addEventListener('keydown', (e) => {
+    if (e.code === 'Space' && !buttonPressed) { e.preventDefault(); buttonPressed = true; updateDisplay(); }
+  });
+  document.addEventListener('keyup', (e) => {
+    if (e.code === 'Space') { buttonPressed = false; updateDisplay(); }
+  });
+
+  updateDisplay();
+</script>
+</body>
+</html>
