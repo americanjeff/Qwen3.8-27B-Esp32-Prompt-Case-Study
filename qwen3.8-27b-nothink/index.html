@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ESP32-C3 LED Circuit Dashboard</title>
+<style>
+  :root { --bg:#10141a; --panel:#1b2230; --line:#2c3648; --text:#dfe7f3; --dim:#8fa0b8; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:14px/1.45 "Segoe UI", system-ui, sans-serif; display:flex; flex-direction:column; align-items:center; padding:16px; }
+  h1 { font-size:20px; margin:4px 0 2px; }
+  .sub { color:var(--dim); font-size:13px; margin-bottom:10px; }
+  #wrap { display:flex; gap:14px; flex-wrap:wrap; justify-content:center; align-items:flex-start; }
+  svg { background:#f6f7f9; border-radius:10px; box-shadow:0 4px 18px rgba(0,0,0,.5); max-width:100%; height:auto; }
+  #panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; min-width:290px; }
+  #panel h2 { font-size:15px; margin:0 0 10px; letter-spacing:.4px; }
+  .row { display:flex; justify-content:space-between; gap:18px; padding:6px 0; border-bottom:1px dashed var(--line); font-size:13.5px; }
+  .row:last-of-type { border-bottom:none; }
+  .val { font-family:ui-monospace, Consolas, monospace; font-weight:600; }
+  .hi { color:#7ee787; } .lo { color:#ff7b72; } .off { color:var(--dim); }
+  #btn { margin-top:14px; width:100%; padding:11px; font-size:15px; font-weight:600; border:none; border-radius:8px;
+         cursor:pointer; background:#2f81f7; color:white; transition:background .15s, transform .05s; }
+  #btn.pressed { background:#1a5dc4; transform:translateY(1px); }
+  #tip { position:fixed; pointer-events:none; background:#0d1117ee; color:var(--text); border:1px solid var(--line);
+         padding:6px 9px; border-radius:6px; font-size:12.5px; max-width:280px; z-index:10; display:none; box-shadow:0 3px 10px rgba(0,0,0,.4); }
+  .legend { margin-top:12px; font-size:12px; color:var(--dim); }
+  .legend span { display:inline-block; width:18px; height:5px; border-radius:3px; vertical-align:middle; margin:0 4px 6px 0; }
+  [data-tip] { cursor:pointer; }
+</style>
+</head>
+<body>
+<h1>ESP32-C3-DevKitM-1 → Breadboard LED Circuit</h1>
+<div class="sub">GPIO4 drives an LED through a 220&nbsp;Ω resistor · GPIO9 (pull-up) reads a pushbutton to GND</div>
+
+<div id="wrap">
+<svg id="scene" viewBox="0 0 1240 860" width="920" aria-label="Interactive circuit diagram"></svg>
+
+<div id="panel">
+  <h2>Live Status</h2>
+  <div class="row"><span>GPIO4 (LED output)</span><span class="val" id="s-gpio4">HIGH</span></div>
+  <div class="row"><span>GPIO9 (button input)</span><span class="val" id="s-gpio9">HIGH (released)</span></div>
+  <div class="row"><span>LED circuit</span><span class="val off" id="s-closed">OPEN</span></div>
+  <div class="row"><span>LED current</span><span class="val off" id="s-current">0 mA</span></div>
+  <div class="row"><span>V<sub>R</sub> / V<sub>LED</sub></span><span class="val off" id="s-volt">— / —</span></div>
+  <button id="btn">Press the button (GPIO9)</button>
+  <div class="legend">
+    <span style="background:#e5484d"></span>3V3 power&nbsp;
+    <span style="background:#1f2430"></span>GND&nbsp;
+    <span style="background:#7048e8"></span>GPIO signal
+  </div>
+</div>
+</div>
+<div id="tip"></div>
+
+<script>
+"use strict";
+const NS = "http://www.w3.org/2000/svg";
+const svg = document.getElementById("scene");
+const tip = document.getElementById("tip");
+
+/* ---------- helpers ---------- */
+function el(tag, attrs = {}, parent) {
+  const n = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  if (parent) parent.appendChild(n);
+  return n;
+}
+function txt(x, y, s, attrs = {}, parent) {
+  const t = el("text", Object.assign({ x, y }, attrs), parent);
+  t.textContent = s;
+  return t;
+}
+/* tooltip wiring */
+function tipify(node, html) {
+  node.setAttribute("data-tip", "1");
+  node.addEventListener("mousemove", e => {
+    tip.innerHTML = html; tip.style.display = "block";
+    const pad = 14;
+    let x = e.clientX + pad, y = e.clientY + pad;
+    const r = tip.getBoundingClientRect();
+    if (x + r.width > innerWidth - 8) x = e.clientX - r.width - pad;
+    if (y + r.height > innerHeight - 8) y = e.clientY - r.height - pad;
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+  });
+  node.addEventListener("mouseleave", () => tip.style.display = "none");
+}
+
+/* ---------- wire color convention ---------- */
+const WIRE = { pwr: "#e5484d", gnd: "#1f2430", sig4: "#7048e8", sig9: "#0ca678" };
+
+/* =====================================================================
+   BREADBOARD  (830 tie-points, drawn at 0.1" pitch = 15px)
+   Main area: cols 1..30, rows a-e (top), f-j (bottom), center gap.
+   Power rails: red (+) / blue (-) on both long edges.
+===================================================================== */
+const BB = { x: 240, y: 90, pitch: 15 };
+// main holes: col 1..30, row index 0..4 (a-e) and 5..9 (f-j), gap between 4 and 5
+function holeXY(col, rowLetter) {
+  const letters = "abcdef";
+  const idx = letters.indexOf(rowLetter);
+  const y = idx < 5 ? BB.y + idx * BB.pitch : BB.y + (idx + 1.4) * BB.pitch; // gap ~21px
+  return [BB.x + col * BB.pitch, y];
+}
+const bbW = 30 * BB.pitch + 60;      // main area width incl. margins
+const bbH = 5 * BB.pitch + 21 + 5 * BB.pitch + 60;
+const RAIL_TOP_RED = BB.y - 26, RAIL_TOP_BLUE = BB.y - 12,
+      RAIL_BOT_RED = () => BB.y + bbH - 42, RAIL_BOT_BLUE = () => BB.y + bbH - 28;
+
+function drawBreadboard() {
+  const g = el("g", { id: "breadboard" }, svg);
+  // body
+  el("rect", { x: BB.x - 45, y: BB.y - 42, width: bbW + 90, height: bbH + 84, rx: 10,
+               fill: "#f2f3f5", stroke: "#c3c9d1", "stroke-width": 2 }, g);
+  // center groove
+  const gapY = BB.y + 5 * BB.pitch + 10.5;
+  el("rect", { x: BB.x - 30, y: gapY - 8, width: bbW + 60, height: 16, rx: 4,
+               fill: "#d8dce2" }, g);
+
+  // power rails (top & bottom): red row and blue row each side
+  function rail(yRow, color, sign, name) {
+    el("rect", { x: BB.x - 30, y: yRow - 6.5, width: bbW + 60, height: 13, rx: 4, fill: color, opacity: .28 }, g);
+    for (let i = 0; i <= 30; i++) {
+      const [x, y] = [BB.x + i * BB.pitch, yRow];
+      el("circle", { cx: x, cy: y, r: 3.1, fill: "#2b3038" }, g);
+    }
+    txt(BB.x - 36, yRow + 4, sign, { "font-size": 13, "font-weight": 700, fill: color, "text-anchor": "end" }, g);
+  }
+  const rTopEl = rail(RAIL_TOP_RED, "#e5484d", "+", "top red");
+  rail(RAIL_TOP_BLUE, "#3b82f6", "−", "top blue");
+  rail(RAIL_BOT_RED(), "#e5484d", "+", "bottom red");
+  rail(RAIL_BOT_BLUE(), "#3b82f6", "−", "bottom blue");
+
+  // column numbers (every 5) + row letters
+  for (let c = 1; c <= 30; c += 5) {
+    const x = BB.x + c * BB.pitch;
+    txt(x, BB.y - 46, String(c), { "font-size": 9.5, fill: "#5a6472", "text-anchor": "middle" }, g);
+    txt(x, BB.y + bbH - 46, String(c), { "font-size": 9.5, fill: "#5a6472", "text-anchor": "middle" }, g);
+  }
+  const letters = ["a","b","c","d","e"];
+  for (let i = 0; i < 5; i++) {
+    txt(BB.x - 8, BB.y + i * BB.pitch + 3.5, letters[i], { "font-size": 9.5, fill: "#5a6472", "text-anchor": "middle" }, g);
+    txt(BB.x - 8, BB.y + (i + 1.4) * BB.pitch + 3.5, letters[i + 5], { "font-size": 9.5, fill: "#5a6472", "text-anchor": "middle" }, g);
+    txt(BB.x + bbW + 8, BB.y + i * BB.pitch + 3.5, letters[i], { "font-size": 9.5, fill: "#5a6472", "text-anchor": "middle" }, g);
+    txt(BB.x + bbW + 8, BB.y + (i + 1.4) * BB.pitch + 3.5, letters[i + 5], { "font-size": 9.5, fill: "#5a6472", "text-anchor": "middle" }, g);
+  }
+
+  // main holes
+  for (let c = 1; c <= 30; c++) {
+    for (const L of letters.concat(["f","g","h","i","j"])) {
+      const [x, y] = holeXY(c, L);
+      el("circle", { cx: x, cy: y, r: 2.7, fill: "#3a4150" }, g);
+    }
+  }
+
+  // electrical node highlights (each column of 5 is ONE net)
+  const hl = (c, L1, L2, color) => {
+    const [x] = holeXY(c, "a");
+    const y1 = holeXY(c, L1)[1], y2 = holeXY(c, L2)[1];
+    el("rect", { x: x - 5.5, y: y1 - 5.5, width: 11, height: y2 - y1 + 11, rx: 3,
+                 fill: color, opacity: .30, "pointer-events": "none" }, g);
+  };
+  hl(6, "a", "e", WIRE.pwr);   // col 6 top: 3V3 rail feed + LED anode
+  hl(6, "f", "j", WIRE.sig4);  // col 6 bottom: GPIO4 → resistor
+  hl(10, "a", "e", WIRE.gnd);  // col 10 top: GND rail feed + LED cathode
+  hl(12, "f", "j", WIRE.sig9); // col 12 bottom: button common / GPIO9
+
+  tipify(g.querySelector("rect"), "<b>Breadboard (830 tie-points)</b><br>Columns 1–30 × rows a–e / f–j. Each column of 5 holes is one electrical node — the center gap separates the two halves.");
+}
+
+/* =====================================================================
+   ESP32-C3-DevKitM-1  (15 pins per side, J1 left / J3 right)
+===================================================================== */
+const J1 = ["GND","3V3","3V3","IO2","IO3","GND","RST","GND","IO0","IO1","IO10","GND","5V","5V","GND"];
+const J3 = ["GND","TX","RX","GND","IO9","IO8","GND","IO7","IO6","IO5","IO4","GND","IO18","IO19","GND"];
+const pinInfo = {
+  GND: "Ground (0 V reference)", "3V3": "3.3 V power supply", "5V": "5 V USB power input",
+  RST: "Reset input (CHIP_PU) — active low, RESET button", TX: "GPIO21 · U0TXD (USB-serial TX)",
+  RX: "GPIO20 · U0RXD (USB-serial RX)", IO2: "GPIO2 · ADC1_CH2 · strapping pin",
+  IO3: "GPIO3 · ADC1_CH3", IO0: "GPIO0 · ADC1_CH0 · strapping (BOOT button)",
+  IO1: "GPIO1 · ADC1_CH1", IO10: "GPIO10 · FSPICS0", IO9: "GPIO9 · strapping pin — pushbutton input here",
+  IO8: "GPIO8 · drives onboard RGB LED · strapping pin", IO7: "GPIO7 · FSPID/MTDO",
+  IO6: "GPIO6 · FSPICLK/MTCK", IO5: "GPIO5 · ADC2_CH0 · FSPIWP/MTDI",
+  IO4: "GPIO4 · ADC1_CH4 — drives the LED through 220 Ω here",
+  IO18: "GPIO18 · USB_D−", IO19: "GPIO19 · USB_D+"
+};
+const DEV = { x: 60, y: 300, pitch: 24 }; // pin spacing 24px
+
+function devPinY(i) { return DEV.y + i * DEV.pitch; }      // i = 0..14
+function drawDevkit() {
+  const g = el("g", { id: "devkit" }, svg);
+  const topY = devPinY(0), botY = devPinY(14);
+  const h = botY - topY + 60;
+
+  // PCB — rounded board, cutout near USB corner like the real DevKitM-1
+  el("rect", { x: DEV.x - 34, y: topY - 42, width: 172, height: h, rx: 12,
+               fill: "#0f6e4d", stroke: "#0a543b", "stroke-width": 2 }, g);
+
+  // ESP32-C3-MINI-1 module outline (metal-shielded, sits on upper half)
+  const mod = el("g", {}, g);
+  el("rect", { x: DEV.x - 20, y: topY - 24, width: 140, height: 96, rx: 5,
+               fill: "#c8ccd2", stroke: "#8d939c", "stroke-width": 1.5 }, mod);
+  el("rect", { x: DEV.x - 20, y: topY + 44, width: 140, height: 6, fill: "#a7adb5" }, mod); // shield seam
+  txt(DEV.x + 50, topY + 8, "ESP32-C3-MINI-1", { "font-size": 9.5, fill: "#3d434c", "text-anchor": "middle", "font-weight": 600 }, mod);
+  txt(DEV.x + 50, topY + 20, "ESP32-C3 · RISC-V · Wi-Fi/BT LE", { "font-size": 7.5, fill: "#5b626c", "text-anchor": "middle" }, mod);
+  // PCB antenna hatch on module corner
+  for (let i = 0; i < 4; i++) el("line", { x1: DEV.x + 88 + i * 7, y1: topY - 20, x2: DEV.x + 96 + i * 7, y2: topY - 20,
+      stroke: "#8d939c", "stroke-width": 1.5 }, mod);
+  txt(DEV.x + 50, topY + 62, "USB-UART bridge (CP2102N)", { "font-size": 7.5, fill: "#5b626c", "text-anchor": "middle" }, mod);
+
+  // LDO
+  el("rect", { x: DEV.x - 14, y: topY + 118, width: 34, height: 20, rx: 2, fill: "#2b3038" }, g);
+  txt(DEV.x + 3, topY + 131, "LDO", { "font-size": 7.5, fill: "#cfd6df", "text-anchor": "middle" }, g);
+
+  // USB-C port (bottom edge)
+  const usbY = botY + 26;
+  el("rect", { x: DEV.x - 14, y: usbY - 9, width: 58, height: 18, rx: 9, fill: "#3d434c" }, g);
+  el("rect", { x: DEV.x - 8, y: usbY - 4.5, width: 46, height: 9, rx: 4.5, fill: "#171b21" }, g);
+  txt(DEV.x + 58, usbY + 4, "USB-C", { "font-size": 8.5, fill: "#dfe7f3" }, g);
+
+  // BOOT & RESET buttons (right of USB)
+  function button(cx, label) {
+    el("rect", { x: cx - 13, y: usbY - 11, width: 26, height: 22, rx: 4, fill: "#dfe3e8", stroke: "#9aa2ac" }, g);
+    el("circle", { cx, cy: usbY, r: 7.5, fill: "#f0f3f6", stroke: "#9aa2ac" }, g);
+    txt(cx, usbY - 15, label, { "font-size": 8, fill: "#dfe7f3", "text-anchor": "middle", "font-weight": 600 }, g);
+  }
+  button(DEV.x + 74, "BOOT");
+  button(DEV.x + 106, "RESET");
+
+  // onboard RGB LED (GPIO8) — small near module edge
+  const rgb = el("circle", { cx: DEV.x - 24, cy: topY + 130, r: 5.5, fill: "#ff4fd8", opacity: .9 }, g);
+  txt(DEV.x - 24, topY + 146, "RGB", { "font-size": 7, fill: "#dfe7f3", "text-anchor": "middle" }, g);
+  tipify(rgb, "<b>Onboard RGB LED</b><br>Addressable (WS2812), driven by GPIO8.");
+
+  // pin headers + silkscreen labels
+  const pins = [];
+  for (let i = 0; i < 15; i++) {
+    const y = devPinY(i);
+    // left header J1
+    const l = el("g", {}, g);
+    el("rect", { x: DEV.x - 46, y: y - 7.5, width: 20, height: 15, rx: 3, fill: "#14181f" }, l);
+    el("circle", { cx: DEV.x - 36, cy: y, r: 4.4, fill: "#d9b64e", stroke: "#8a6d1f", "stroke-width": .8 }, l);
+    txt(DEV.x - 52, y + 3.5, J1[i], { "font-size": 9.5, fill: "#dfe7f3", "text-anchor": "end", "font-weight": 600 }, g);
+    tipify(l, `<b>J1.${i+1} — ${J1[i]}</b><br>${pinInfo[J1[i]]}`);
+    pins.push([DEV.x - 36, y]);
+    // right header J3
+    const r = el("g", {}, g);
+    el("rect", { x: DEV.x + 26, y: y - 7.5, width: 20, height: 15, rx: 3, fill: "#14181f" }, r);
+    el("circle", { cx: DEV.x + 36, cy: y, r: 4.4, fill: "#d9b64e", stroke: "#8a6d1f", "stroke-width": .8 }, r);
+    txt(DEV.x + 52, y + 3.5, J3[i], { "font-size": 9.5, fill: "#dfe7f3" }, g);
+    tipify(r, `<b>J3.${i+1} — ${J3[i]}</b><br>${pinInfo[J3[i]]}`);
+    pins.push([DEV.x + 36, y]);
+  }
+  return { left: (i) => [DEV.x - 36, devPinY(i)], right: (i) => [DEV.x + 36, devPinY(i)] };
+}
+
+/* =====================================================================
+   WIRE ROUTING
+===================================================================== */
+// Key points
+const P = {};
+function computePoints(dev) {
+  // DevKit pins
+  P.gpio4  = dev.right(10);   // J3.11 IO4
+  P.gpio9  = dev.right(4);    // J3.5  IO9
+  P.v33    = dev.left(2);     // J1.2  3V3
+  P.gndPin = dev.left(0);     // J1.1  GND
+  // Breadboard holes
+  // --- LED branch: GPIO4 → resistor → LED anode (col 6) / cathode (col 10) → GND rail ---
+  P.railPlus6   = [BB.x + 6 * BB.pitch, RAIL_TOP_RED];      // top red rail @ col 6 (3V3 feed)
+  P.col6a       = holeXY(6, "a");
+  P.col6e       = holeXY(6, "e");
+  P.col6f       = holeXY(6, "f");
+  P.col6j       = holeXY(6, "j");
+  P.btmBlue10   = [BB.x + 10 * BB.pitch, RAIL_BOT_BLUE()];  // bottom blue rail @ col 10 (GND)
+  P.col10a      = holeXY(10, "a");
+  P.col10e      = holeXY(10, "e");
+  P.btmBlue12   = [BB.x + 12 * BB.pitch, RAIL_BOT_BLUE()];  // bottom blue rail @ col 12
+  P.col12f      = holeXY(12, "f");
+  P.col12j      = holeXY(12, "j");
+}
+
+function wirePath(pts, color, width = 4) {
+  const d = pts.map((p, i) => (i ? "L" : "M") + p[0] + " " + p[1]).join(" ");
+  return el("path", { d, fill: "none", stroke: color, "stroke-width": width,
+                      "stroke-linecap": "round", "stroke-linejoin": "round" }, svg);
+}
+
+/* =====================================================================
+   COMPONENTS
+===================================================================== */
+function drawResistor(g, x1, y1, x2, y2) {
+  // vertical resistor bridging col6.e (top half) and col6.f (bottom half)
+  const cx = x1, top = Math.min(y1, y2), bot = Math.max(y1, y2);
+  el("line", { x1: cx, y1: top, x2: cx, y2: top + 9, stroke: "#5a6472", "stroke-width": 2.5 }, g);
+  const bodyY = top + 9, bodyH = bot - top - 18;
+  // body
+  el("rect", { x: cx - 9, y: bodyY, width: 18, height: bodyH, rx: 7, fill: "#e8d8b8", stroke: "#a08c5f", "stroke-width": 1.2 }, g);
+  // color bands for 220 Ω: red-red-black-gold (±5%)
+  const bands = ["#c62828", "#c62828", "#212121", "#d4a017"];
+  bands.forEach((c, i) => el("rect", { x: cx - 9, y: bodyY + 5 + i * ((bodyH - 10) / 4), width: 18, height: 4.2, fill: c }, g));
+  el("line", { x1: cx, y1: bot - 9, x2: cx, y2: bot, stroke: "#5a6472", "stroke-width": 2.5 }, g);
+  txt(cx + 14, bodyY + bodyH / 2 + 3, "220 Ω", { "font-size": 9.5, fill: "#4a5260", "font-weight": 600 }, g);
+}
+
+// straight wire between two breadboard holes (same column or same row)
+function stubWire(g, p1, p2, color) {
+  el("line", { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1], stroke: color, "stroke-width": 3.5, "stroke-linecap": "round" }, g);
+}
+
+function drawLED(g, cx, topY) {
+  // LED pointing down: anode up (into col 6), cathode = flat side, down (into col 10)
+  const gG = el("g", {}, g);
+  el("line", { x1: cx, y1: topY, x2: cx, y2: topY + 8, stroke: "#5a6472", "stroke-width": 2.5 }, gG);
+  // triangle body (wide at top = anode)
+  el("polygon", { points: `${cx-9},${topY+8} ${cx+9},${topY+8} ${cx},${topY+30}`, fill: "#ff8a65cc", stroke: "#d84315", "stroke-width": 1.2 }, gG);
+  // flat cathode bar
+  el("line", { x1: cx - 9, y1: topY + 30, x2: cx + 9, y2: topY + 30, stroke: "#d84315", "stroke-width": 2.5 }, gG);
+  el("line", { x1: cx, y1: topY + 30, x2: cx, y2: topY + 42, stroke: "#5a6472", "stroke-width": 2.5 }, gG);
+  // glow (toggled)
+  const glow = el("circle", { id: "led-glow", cx, cy: topY + 19, r: 16, fill: "#ffab40", opacity: 0 }, g);
+  // emission arrows
+  const ar = el("g", { id: "led-arrows", opacity: 0 }, gG);
+  [[-14, -4], [14, 4]].forEach(([dx, dy]) => {
+    el("line", { x1: cx + dx * .7, y1: topY + 18 + dy * .7, x2: cx + dx * 1.6, y2: topY + 18 + dy * 1.6, stroke: "#ff9800", "stroke-width": 1.5 }, ar);
+    el("polygon", { points: `0,-3 6,0 0,3`, fill: "#ff9800",
+      transform: `translate(${cx + dx * 1.6}, ${topY + 18 + dy * 1.6}) rotate(${Math.atan2(dy, dx) * 57.3})` }, ar);
+  });
+  txt(cx + 14, topY + 22, "LED", { "font-size": 9.5, fill: "#4a5260", "font-weight": 600 }, gG);
+  return { glow, arrows: ar };
+}
+
+function drawButton(g, cx, yTop) {
+  // pushbutton bridging col12.f (top half) and col12.j (bottom half)
+  const grp = el("g", {}, g);
+  const top = yTop - 44;              // span of the two holes
+  el("line", { x1: cx, y1: top, x2: cx, y2: top + 9, stroke: "#5a6472", "stroke-width": 2.5 }, grp);
+  const bodyY = top + 9;
+  // base
+  el("rect", { x: cx - 16, y: bodyY + 18, width: 32, height: 10, rx: 2, fill: "#3d434c" }, grp);
+  // plunger (moves down when pressed)
+  const plunger = el("g", { id: "btn-plunger" }, grp);
+  el("rect", { x: cx - 8, y: bodyY + 2, width: 16, height: 18, rx: 3, fill: "#9aa2ac" }, plunger);
+  el("circle", { cx, cy: bodyY + 2, r: 7, fill: "#dfe3e8", stroke: "#9aa2ac", "stroke-width": 1.5 }, plunger);
+  el("line", { x1: cx, y1: bodyY + 28, x2: cx, y2: yTop, stroke: "#5a6472", "stroke-width": 2.5 }, grp);
+  txt(cx + 20, bodyY + 14, "SW", { "font-size": 9.5, fill: "#4a5260", "font-weight": 600 }, grp);
+  return { plunger, group: grp };
+}
+
+/* =====================================================================
+   ASSEMBLE SCENE
+===================================================================== */
+drawBreadboard();
+const dev = drawDevkit();
+computePoints(dev);
+
+// --- wires (drawn before components so components sit on top) ---
+const vBus = BB.x - 78;   // vertical wire bus between devkit and breadboard
+// 3V3 (J1.2) → top red rail @ col 6  [red = power]
+wirePath([P.v33, [vBus + 14, P.v33[1]], [vBus + 14, RAIL_TOP_RED], P.railPlus6], WIRE.pwr);
+// GPIO4 (J3.11) → col 6 bottom half  [purple = signal]
+wirePath([P.gpio4, [vBus, P.gpio4[1]], [vBus, P.col6j[1]], P.col6j], WIRE.sig4);
+// GPIO9 (J3.5) → col 12 bottom half  [teal = signal]
+wirePath([P.gpio9, [vBus - 14, P.gpio9[1]], [vBus - 14, P.col12j[1]], P.col12j], WIRE.sig9);
+// GND pin (J1.1) → bottom blue rail @ col 10
+wirePath([P.gndPin, [vBus - 28, P.gndPin[1]], [vBus - 28, RAIL_BOT_BLUE()], P.btmBlue10], WIRE.gnd);
+
+// --- components on top ---
+const comp = el("g", { id: "components" }, svg);
+const res = el("g", {}, comp);
+drawResistor(res, P.col6e[0], P.col6e[1] + 2, P.col6f[0], P.col6f[1] - 2);
+// short stub wires (same-column / same-row breadboard connections)
+stubWire(comp, P.railPlus6, P.col6a, WIRE.pwr);            // red rail → col 6 node
+stubWire(comp, P.col10e, P.btmBlue10, WIRE.gnd);           // col 10 node → blue GND rail
+stubWire(comp, P.col12f, P.btmBlue12, WIRE.gnd);           // button common → blue GND rail
+const ledG = el("g", {}, comp);
+const led = drawLED(ledG, P.col10a[0], P.col10a[1] - 4);
+const button = drawButton(comp, P.col12j[0], P.col12j[1]);
+
+// tooltips for components
+tipify(res, "<b>220 Ω resistor</b><br>Limits LED current: (3.3 V − 2.0 V) / 220 Ω ≈ 5.9 mA.");
+tipify(ledG, "<b>LED (red)</b><br>Anode (top) → GPIO4 via 220 Ω · Cathode (flat side, bottom) → GND rail.");
+tipify(button.group, "<b>Pushbutton</b><br>GPIO9 (internal pull-up) ↔ GND. Click it (or use the panel button / spacebar) to toggle.");
+
+// --- current-flow overlay (on very top): one dashed path along the actual closed loop,
+// GPIO4 → resistor → LED anode → (LED) → cathode → GND rail → GND pin ---
+const flowD = [
+  P.gpio4, [vBus, P.gpio4[1]], [vBus, P.col6j[1]], P.col6j,
+  P.col6f, P.col6e,                       // through the resistor
+  P.col6a,                                // anode hole
+  [P.col10a[0], P.col10a[1] - 4],         // across the LED (anode → cathode)
+  P.col10a, P.col10e,                     // through col-10 node
+  P.btmBlue10,                            // down to blue GND rail
+  [vBus - 28, RAIL_BOT_BLUE()], [vBus - 28, P.gndPin[1]], P.gndPin   // back to board GND pin
+].map((p, i) => (i ? "L" : "M") + p[0] + " " + p[1]).join(" ");
+const flowLayer = el("g", { id: "flow", opacity: 0 }, svg);
+const loopPath = el("path", { d: flowD, fill: "none", stroke: "#ffd54f", "stroke-width": 4.5,
+  "stroke-linecap": "round", "stroke-dasharray": "4 11", "pointer-events": "none" }, flowLayer);
+el("animate", { attributeName: "stroke-dashoffset", from: 0, to: -30, dur: "0.7s", repeatCount: "indefinite" }, loopPath);
+
+/* =====================================================================
+   LOGIC + INTERACTIVITY
+===================================================================== */
+const state = { buttonPressed: false };
+// Demo sketch behavior: GPIO9 is a pulled-up input (LOW while pressed); the firmware
+// drives GPIO4 HIGH when the button is released and LOW while it is held.
+function gpio9Level() { return state.buttonPressed ? 0 : 1; }
+function gpio4Level() { return state.buttonPressed ? 0 : 1; }
+
+const sGpio4 = document.getElementById("s-gpio4");
+const sGpio9 = document.getElementById("s-gpio9");
+const sClosed = document.getElementById("s-closed");
+const sCurrent = document.getElementById("s-current");
+const sVolt = document.getElementById("s-volt");
+const btnEl = document.getElementById("btn");
+
+function render() {
+  const g4 = gpio4Level(), g9 = gpio9Level();
+  // Current flows when GPIO4 is HIGH: GPIO4 → 220 Ω → LED anode → cathode → GND rail → GND pin.
+  sGpio4.textContent = g4 ? "HIGH (3.3 V)" : "LOW (0 V)";
+  sGpio4.className = "val " + (g4 ? "hi" : "lo");
+  sGpio9.textContent = g9 ? "HIGH (released)" : "LOW (pressed)";
+  sGpio9.className = "val " + (g9 ? "hi" : "lo");
+
+  const closed = g4 === 1;
+  sClosed.textContent = closed ? "CLOSED — current flowing" : "OPEN";
+  sClosed.className = "val " + (closed ? "hi" : "off");
+
+  if (closed) {
+    // V_LED ≈ 2.0 V (red), I = (3.3 − 2.0)/220 ≈ 5.9 mA
+    sCurrent.textContent = "≈ 5.9 mA"; sCurrent.className = "val hi";
+    sVolt.innerHTML = "2.86 V / 2.0 V"; sVolt.className = "val hi";
+  } else {
+    sCurrent.textContent = "0 mA"; sCurrent.className = "val off";
+    sVolt.textContent = "— / —"; sVolt.className = "val off";
+  }
+
+  led.glow.setAttribute("opacity", closed ? .85 : 0);
+  led.arrows.setAttribute("opacity", closed ? 1 : 0);
+  flowLayer.setAttribute("opacity", closed ? 1 : 0);
+
+  // button plunger position
+  const dy = state.buttonPressed ? 5 : 0;
+  document.getElementById("btn-plunger").setAttribute("transform", `translate(0,${dy})`);
+  btnEl.classList.toggle("pressed", state.buttonPressed);
+}
+
+function toggleButton() { state.buttonPressed = !state.buttonPressed; render(); }
+btnEl.addEventListener("click", toggleButton);
+// clicking the SVG button also toggles
+button.group.addEventListener("click", toggleButton);
+document.addEventListener("keydown", e => { if (e.code === "Space") { e.preventDefault(); toggleButton(); } });
+
+render();
+</script>
+</body>
+</html>

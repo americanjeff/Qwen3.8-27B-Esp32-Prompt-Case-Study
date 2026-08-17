@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ESP32-C3-DevKitM-1 LED Circuit Dashboard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    overflow-x: hidden;
+    min-height: 100vh;
+  }
+  h1 {
+    text-align: center;
+    padding: 12px 0 4px;
+    font-size: 1.4em;
+    color: #00d4ff;
+    letter-spacing: 1px;
+  }
+  .subtitle {
+    text-align: center;
+    font-size: 0.85em;
+    color: #888;
+    margin-bottom: 8px;
+  }
+  #main-svg {
+    display: block;
+    margin: 0 auto;
+    max-width: 100%;
+    height: auto;
+  }
+  /* Tooltip */
+  #tooltip {
+    position: fixed;
+    background: rgba(20, 20, 40, 0.95);
+    border: 1px solid #00d4ff;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    color: #e0e0e0;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+    z-index: 1000;
+    max-width: 220px;
+    line-height: 1.4;
+    box-shadow: 0 2px 12px rgba(0,212,255,0.2);
+  }
+  #tooltip.visible { opacity: 1; }
+  #tooltip .tt-title { color: #00d4ff; font-weight: bold; }
+  #tooltip .tt-detail { color: #aaa; margin-top: 2px; }
+
+  /* Status Panel */
+  #status-panel {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(15, 15, 30, 0.95);
+    border-top: 2px solid #00d4ff44;
+    padding: 10px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 30px;
+    flex-wrap: wrap;
+    z-index: 100;
+    backdrop-filter: blur(8px);
+  }
+  .status-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+  }
+  .status-label { color: #888; }
+  .status-value {
+    font-weight: bold;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+  }
+  .status-high { color: #00ff88; }
+  .status-low { color: #ff4466; }
+  .status-closed { color: #00ff88; }
+  .status-open { color: #ff8800; }
+  .status-current { color: #ffcc00; }
+
+  /* Controls */
+  .control-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .control-label {
+    font-size: 12px;
+    color: #aaa;
+  }
+  .toggle-btn {
+    background: #333;
+    border: 2px solid #555;
+    border-radius: 20px;
+    width: 50px;
+    height: 26px;
+    cursor: pointer;
+    position: relative;
+    transition: all 0.3s;
+  }
+  .toggle-btn.active {
+    background: #00aa55;
+    border-color: #00ff88;
+  }
+  .toggle-btn::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 20px;
+    height: 20px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform 0.3s;
+  }
+  .toggle-btn.active::after {
+    transform: translateX(24px);
+  }
+  .push-btn {
+    background: #444;
+    border: 2px solid #666;
+    border-radius: 8px;
+    padding: 6px 16px;
+    color: #e0e0e0;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: bold;
+    transition: all 0.15s;
+    user-select: none;
+  }
+  .push-btn:hover { background: #555; }
+  .push-btn:active, .push-btn.pressed {
+    background: #ff8800;
+    border-color: #ffaa33;
+    transform: scale(0.95);
+  }
+
+  /* Legend */
+  .legend {
+    position: fixed;
+    top: 60px;
+    right: 15px;
+    background: rgba(15, 15, 30, 0.9);
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 11px;
+    z-index: 50;
+  }
+  .legend-title {
+    color: #00d4ff;
+    font-weight: bold;
+    margin-bottom: 6px;
+    font-size: 12px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 4px 0;
+    color: #aaa;
+  }
+  .legend-color {
+    width: 20px;
+    height: 3px;
+    border-radius: 2px;
+  }
+
+  /* SVG interactivity */
+  .hover-target { cursor: pointer; }
+  .wire:hover { stroke-width: 4 !important; filter: brightness(1.4); }
+  .pin:hover { filter: brightness(1.5); }
+  .component:hover { filter: brightness(1.2); }
+</style>
+</head>
+<body>
+
+<h1>ESP32-C3-DevKitM-1 &mdash; LED Circuit Dashboard</h1>
+<p class="subtitle">Interactive breadboard wiring: GPIO4 drives LED through 220&Omega; resistor &bull; GPIO9 reads pushbutton (internal pull-up)</p>
+
+<div id="tooltip">
+  <div class="tt-title"></div>
+  <div class="tt-detail"></div>
+</div>
+
+<div class="legend">
+  <div class="legend-title">Wire Colors</div>
+  <div class="legend-item"><div class="legend-color" style="background:#ff3333"></div> 3V3 Power</div>
+  <div class="legend-item"><div class="legend-color" style="background:#333333"></div> GND</div>
+  <div class="legend-item"><div class="legend-color" style="background:#3388ff"></div> GPIO4 Signal</div>
+  <div class="legend-item"><div class="legend-color" style="background:#ff8800"></div> GPIO9 Signal</div>
+  <div class="legend-item"><div class="legend-color" style="background:#00ff88"></div> Current Flow</div>
+</div>
+
+<svg id="main-svg" viewBox="0 0 1100 780" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <!-- Glow filter for LED -->
+  <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+    <feGaussianBlur stdDeviation="6" result="blur"/>
+    <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+  <filter id="soft-glow" x="-30%" y="-30%" width="160%" height="160%">
+    <feGaussianBlur stdDeviation="3" result="blur"/>
+    <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+  <!-- LED gradient -->
+  <radialGradient id="led-on" cx="50%" cy="50%" r="50%">
+    <stop offset="0%" stop-color="#ff4444" stop-opacity="1"/>
+    <stop offset="60%" stop-color="#ff2222" stop-opacity="0.8"/>
+    <stop offset="100%" stop-color="#ff0000" stop-opacity="0.3"/>
+  </radialGradient>
+  <radialGradient id="led-off" cx="50%" cy="50%" r="50%">
+    <stop offset="0%" stop-color="#663333"/>
+    <stop offset="100%" stop-color="#331111"/>
+  </radialGradient>
+  <!-- Current flow dash animation -->
+  <style>
+    @keyframes flow { to { stroke-dashoffset: -24; } }
+    .current-flow {
+      stroke-dasharray: 8 16;
+      animation: flow 0.8s linear infinite;
+    }
+  </style>
+</defs>
+
+<!-- Background grid -->
+<pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+  <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#ffffff08" stroke-width="0.5"/>
+</pattern>
+<rect width="1100" height="780" fill="url(#grid)"/>
+
+<!-- ============================================ -->
+<!-- ESP32-C3-DevKitM-1 BOARD                     -->
+<!-- ============================================ -->
+<g id="devkit-board" class="hover-target" data-tooltip="ESP32-C3-DevKitM-1|Espressif dev board based on ESP32-C3-MINI-1 module. RISC-V, Wi-Fi + BLE 5.0, 4MB flash.">
+  <!-- Board body -->
+  <rect x="75" y="90" width="130" height="420" rx="6" fill="#1a5c2a" stroke="#2d8a4e" stroke-width="2"/>
+  <!-- Board inner detail lines -->
+  <rect x="80" y="95" width="120" height="410" rx="4" fill="none" stroke="#2d8a4e44" stroke-width="0.5"/>
+
+  <!-- USB-C connector (top) -->
+  <rect x="105" y="82" width="70" height="16" rx="8" fill="#555" stroke="#777" stroke-width="1.5"/>
+  <rect x="115" y="86" width="50" height="8" rx="4" fill="#333"/>
+  <text x="140" y="92" text-anchor="middle" fill="#aaa" font-size="7" font-family="monospace">USB-C</text>
+
+  <!-- BOOT button -->
+  <rect x="95" y="108" width="22" height="14" rx="3" fill="#888" stroke="#aaa" stroke-width="1"/>
+  <text x="106" y="118" text-anchor="middle" fill="#222" font-size="6" font-weight="bold">BOOT</text>
+
+  <!-- RESET button -->
+  <rect x="135" y="108" width="22" height="14" rx="3" fill="#888" stroke="#aaa" stroke-width="1"/>
+  <text x="146" y="118" text-anchor="middle" fill="#222" font-size="6" font-weight="bold">RST</text>
+
+  <!-- 5V Power LED (small) -->
+  <circle cx="160" cy="130" r="3" fill="#00ff44" opacity="0.8"/>
+  <text x="160" y="126" text-anchor="middle" fill="#666" font-size="5">PWR</text>
+
+  <!-- ESP32-C3-MINI-1 module (center) -->
+  <rect x="100" y="150" width="80" height="100" rx="4" fill="#222" stroke="#444" stroke-width="1.5"/>
+  <text x="140" y="185" text-anchor="middle" fill="#888" font-size="7" font-weight="bold">ESP32-C3</text>
+  <text x="140" y="197" text-anchor="middle" fill="#666" font-size="6">MINI-1</text>
+  <!-- Module antenna area -->
+  <rect x="105" y="210" width="70" height="30" rx="2" fill="#1a1a1a" stroke="#333" stroke-width="0.5"/>
+  <text x="140" y="229" text-anchor="middle" fill="#555" font-size="5">PCB ANTENNA</text>
+
+  <!-- RGB LED (onboard, near bottom-right) -->
+  <circle cx="155" cy="430" r="5" fill="#ff00ff" opacity="0.6" filter="url(#soft-glow)"/>
+  <text x="155" y="448" text-anchor="middle" fill="#888" font-size="6">RGB</text>
+  <text x="155" y="456" text-anchor="middle" fill="#666" font-size="5">(GPIO8)</text>
+
+  <!-- Board silkscreen text -->
+  <text x="140" y="310" text-anchor="middle" fill="#3a9a5e" font-size="8" font-weight="bold">ESP32-C3-DevKitM-1</text>
+</g>
+
+<!-- ============================================ -->
+<!-- J1 PIN HEADER (left side)                     -->
+<!-- ============================================ -->
+<g id="j1-header">
+  <text x="60" y="130" fill="#00d4ff" font-size="9" font-weight="bold">J1</text>
+</g>
+
+<!-- J1 pins: GND,3V3,3V3,IO2,IO3,GND,RST,GND,IO0,IO1,IO10,GND,5V,5V,GND -->
+<!-- Pin positions: x=72, y=154 + i*24 -->
+<g id="j1-pins">
+  <!-- Pin 1: GND -->
+  <circle cx="72" cy="154" r="4" fill="#333" stroke="#666" stroke-width="1" class="pin hover-target" data-tooltip="J1-1: GND|Ground pin"/>
+  <text x="55" y="157" text-anchor="end" fill="#888" font-size="7">GND</text>
+  <!-- Pin 2: 3V3 -->
+  <circle cx="72" cy="178" r="4" fill="#cc3333" stroke="#ff5555" stroke-width="1" class="pin hover-target" data-tooltip="J1-2: 3V3|3.3V power supply"/>
+  <text x="55" y="181" text-anchor="end" fill="#ff6666" font-size="7">3V3</text>
+  <!-- Pin 3: 3V3 -->
+  <circle cx="72" cy="202" r="4" fill="#cc3333" stroke="#ff5555" stroke-width="1" class="pin hover-target" data-tooltip="J1-3: 3V3|3.3V power supply (duplicate)"/>
+  <text x="55" y="205" text-anchor="end" fill="#ff6666" font-size="7">3V3</text>
+  <!-- Pin 4: IO2 -->
+  <circle cx="72" cy="226" r="4" fill="#336699" stroke="#5588bb" stroke-width="1" class="pin hover-target" data-tooltip="J1-4: IO2|GPIO2, ADC1_CH2, FSPIQ (strapping pin)"/>
+  <text x="55" y="229" text-anchor="end" fill="#88aacc" font-size="7">IO2</text>
+  <!-- Pin 5: IO3 -->
+  <circle cx="72" cy="250" r="4" fill="#336699" stroke="#5588bb" stroke-width="1" class="pin hover-target" data-tooltip="J1-5: IO3|GPIO3, ADC1_CH3"/>
+  <text x="55" y="253" text-anchor="end" fill="#88aacc" font-size="7">IO3</text>
+  <!-- Pin 6: GND -->
+  <circle cx="72" cy="274" r="4" fill="#333" stroke="#666" stroke-width="1" class="pin hover-target" data-tooltip="J1-6: GND|Ground pin"/>
+  <text x="55" y="277" text-anchor="end" fill="#888" font-size="7">GND</text>
+  <!-- Pin 7: RST -->
+  <circle cx="72" cy="298" r="4" fill="#996633" stroke="#bb8855" stroke-width="1" class="pin hover-target" data-tooltip="J1-7: RST|CHIP_PU, active-high enable/reset"/>
+  <text x="55" y="301" text-anchor="end" fill="#cc9966" font-size="7">RST</text>
+  <!-- Pin 8: GND -->
+  <circle cx="72" cy="322" r="4" fill="#333" stroke="#666" stroke-width="1" class="pin hover-target" data-tooltip="J1-8: GND|Ground pin"/>
+  <text x="55" y="325" text-anchor="end" fill="#888" font-size="7">GND</text>
+  <!-- Pin 9: IO0 -->
+  <circle cx="72" cy="346" r="4" fill="#336699" stroke="#5588bb" stroke-width="1" class="pin hover-target" data-tooltip="J1-9: IO0|GPIO0, ADC1_CH0, XTAL_32K_P (strapping pin)"/>
+  <text x="55" y="349" text-anchor="end" fill="#88aacc" font-size="7">IO0</text>
+  <!-- Pin 10: IO1 -->
+  <circle cx="72" cy="370" r="4" fill="#336699" stroke="#5588bb" stroke-width="1" class="pin hover-target" data-tooltip="J1-10: IO1|GPIO1, ADC1_CH1, XTAL_32K_N"/>
+  <text x="55" y="373" text-anchor="end" fill="#88aacc" font-size="7">IO1</text>
+  <!-- Pin 11: IO10 -->
+  <circle cx="72" cy="394" r="4" fill="#336699" stroke="#5588bb" stroke-width="1" class="pin hover-target" data-tooltip="J1-11: IO10|GPIO10, FSPICS0"/>
+  <text x="55" y="397" text-anchor="end" fill="#88aacc" font-size="7">IO10</text>
+  <!-- Pin 12: GND -->
+  <circle cx="72" cy="418" r="4" fill="#333" stroke="#666" stroke-width="1" class="pin hover-target" data-tooltip="J1-12: GND|Ground pin"/>
+  <text x="55" y="421" text-anchor="end" fill="#888" font-size="7">GND</text>
+  <!-- Pin 13: 5V -->
+  <circle cx="72" cy="442" r="4" fill="#cc6633" stroke="#ff8855" stroke-width="1" class="pin hover-target" data-tooltip="J1-13: 5V|5V power supply (from USB)"/>
+  <text x="55" y="445" text-anchor="end" fill="#ff9966" font-size="7">5V</text>
+  <!-- Pin 14: 5V -->
+  <circle cx="72" cy="466" r="4" fill="#cc6633" stroke="#ff8855" stroke-width="1" class="pin hover-target" data-tooltip="J1-14: 5V|5V power supply (duplicate)"/>
+  <text x="55" y="469" text-anchor="end" fill="#ff9966" font-size="7">5V</text>
+  <!-- Pin 15: GND -->
+  <circle cx="72" cy="490" r="4" fill="#333" stroke="#666" stroke-width="1" class="pin hover-target" data-tooltip="J1-15: GND|Ground pin"/>
+  <text x="55" y="493" text-anchor="end" fill="#888" font-size="7">GND</text>
+</g>
+
+<!-- ============================================ -->
+<!-- J3 PIN HEADER (right side)                    -->
+<!-- ============================================ -->
+<g id="j3-header">
+  <text x="215" y="130" fill="#00d4ff" font-size="9" font-weight="bold">J3</text>
+</g>
+
+<!-- J3 pins: GND,TX,RX,GND,IO9,IO8,GND,IO7,IO6,IO5,IO4,GND,IO18,IO19,GND -->
+<g id="j3-pins">
+  <!-- Pin 1: GND -->
+  <circle cx="208" cy="154" r="4" fill="#333" stroke="#666" stroke-width="1" class="pin hover-target" data-tooltip="J3-1: GND|Ground pin"/>
+  <text x="225" y="157" fill="#888" font-size="7">GND</text>
+  <!-- Pin 2: TX -->
+  <circle cx="208" cy="178" r="4" fill="#336699" stroke="#5588bb" stroke-width="1" class="pin hover-target" data-tooltip="J3-2: TX|GPIO21, U0TXD (USB UART)"/>
+  <text x="225" y="181" fill="#88aacc" font-size="7">TX</text>
+  <!-- Pin 3: RX -->
+  <circle cx="208" cy="202" r="4" fill="#336699" stroke="#5588bb" stroke-width="1" class="pin hover-target" data-tooltip="J3-3: RX|GPIO20, U0RXD (USB UART)"/>
+  <text x="225" y="205" fill="#88aacc" font-size="7">RX</text>
+  <!-- Pin 4: GND -->
+  <circle cx="208" cy="226" r="4" fill="#333" stroke="#666" stroke-width="1" class="pin hover-target" data-tooltip="J3-4: GND|Ground pin"/>
+  <text x="225" y="229" fill="#888" font-size="7">GND</text>
+  <!-- Pin 5: IO9 -->
+  <circle cx="208" cy="250" r="4" fill="#ff8800" stroke="#ffaa33" stroke-width="1.5" class="pin hover-target" data-tooltip="J3-5: IO9|GPIO9 (strapping pin) &mdash; Pushbutton input with internal pull-up"/>
+  <text x="225" y="253" fill="#ffaa33" font-size="7" font-weight="bold">IO9</text>
+  <!-- Pin 6: IO8 -->
+  <circle cx="208" cy="274" r="4" fill="#336699" stroke="#5588bb" stroke-width="1" class="pin hover-target" data-tooltip="J3-6: IO8|GPIO8 (strapping pin) &mdash; Onboard RGB LED"/>
+  <text x="225" y="277" fill="#88aacc" font-size="7">IO8</text>
+  <!-- Pin 7: GND -->
+  <circle cx="208" cy="298" r="4" fill="#333" stroke="#666" stroke-width="1" class="pin hover-target" data-tooltip="J3-7: GND|Ground pin"/>
+  <text x="225" y="301" fill="#888" font-size="7">GND</text>
+  <!-- Pin 8: IO7 -->
+  <circle cx="208" cy="322" r="4" fill="#336699" stroke="#5588bb" stroke-width="1" class="pin hover-target" data-tooltip="J3-8: IO7|GPIO7, FSPID, MTDO"/>
+  <text x="225" y="325" fill="#88aacc" font-size="7">IO7</text>
+  <!-- Pin 9: IO6 -->
+  <circle cx="208" cy="346" r="4" fill="#336699" stroke="#5588bb" stroke-width="1" class="pin hover-target" data-tooltip="J3-9: IO6|GPIO6, FSPICLK, MTCK"/>
+  <text x="225" y="349" fill="#88aacc" font-size="7">IO6</text>
+  <!-- Pin 10: IO5 -->
+  <circle cx="208" cy="370" r="4" fill="#336699" stroke="#5588bb" stroke-width="1" class="pin hover-target" data-tooltip="J3-10: IO5|GPIO5, ADC2_CH0, FSPIWP, MTDI"/>
+  <text x="225" y="373" fill="#88aacc" font-size="7">IO5</text>
+  <!-- Pin 11: IO4 -->
+  <circle cx="208" cy="394" r="4" fill="#3388ff" stroke="#55aaff" stroke-width="1.5" class="pin hover-target" data-tooltip="J3-11: IO4|GPIO4, ADC1_CH4, FSPIHD &mdash; LED output"/>
+  <text x="225" y="397" fill="#55aaff" font-size="7" font-weight="bold">IO4</text>
+  <!-- Pin 12: GND -->
+  <circle cx="208" cy="418" r="4" fill="#333" stroke="#666" stroke-width="1" class="pin hover-target" data-tooltip="J3-12: GND|Ground pin"/>
+  <text x="225" y="421" fill="#888" font-size="7">GND</text>
+  <!-- Pin 13: IO18 -->
+  <circle cx="208" cy="442" r="4" fill="#336699" stroke="#5588bb" stroke-width="1" class="pin hover-target" data-tooltip="J3-13: IO18|GPIO18, USB_D-&mdash;"/>
+  <text x="225" y="445" fill="#88aacc" font-size="7">IO18</text>
+  <!-- Pin 14: IO19 -->
+  <circle cx="208" cy="466" r="4" fill="#336699" stroke="#5588bb" stroke-width="1" class="pin hover-target" data-tooltip="J3-14: IO19|GPIO19, USB_D+"/>
+  <text x="225" y="469" fill="#88aacc" font-size="7">IO19</text>
+  <!-- Pin 15: GND -->
+  <circle cx="208" cy="490" r="4" fill="#333" stroke="#666" stroke-width="1" class="pin hover-target" data-tooltip="J3-15: GND|Ground pin"/>
+  <text x="225" y="493" fill="#888" font-size="7">GND</text>
+</g>
+
+<!-- ============================================ -->
+<!-- BREADBOARD                                    -->
+<!-- ============================================ -->
+<g id="breadboard">
+  <!-- Breadboard body -->
+  <rect x="280" y="230" width="720" height="310" rx="8" fill="#f0f0e8" stroke="#ccc" stroke-width="2"/>
+  <!-- Inner shadow -->
+  <rect x="282" y="232" width="716" height="306" rx="7" fill="none" stroke="#ddd" stroke-width="0.5"/>
+
+  <!-- Power rail labels -->
+  <text x="298" y="252" fill="#cc3333" font-size="8" font-weight="bold">+</text>
+  <text x="298" y="274" fill="#3366cc" font-size="8" font-weight="bold">&minus;</text>
+  <text x="298" y="488" fill="#cc3333" font-size="8" font-weight="bold">+</text>
+  <text x="298" y="510" fill="#3366cc" font-size="8" font-weight="bold">&minus;</text>
+
+  <!-- Row labels (a-j) -->
+  <text x="298" y="315" fill="#999" font-size="7">a</text>
+  <text x="298" y="337" fill="#999" font-size="7">b</text>
+  <text x="298" y="359" fill="#999" font-size="7">c</text>
+  <text x="298" y="381" fill="#999" font-size="7">d</text>
+  <text x="298" y="403" fill="#999" font-size="7">e</text>
+  <!-- center gap -->
+  <text x="298" y="427" fill="#999" font-size="7">f</text>
+  <text x="298" y="449" fill="#999" font-size="7">g</text>
+  <text x="298" y="471" fill="#999" font-size="7">h</text>
+  <text x="298" y="493" fill="#999" font-size="7">i</text>
+  <text x="298" y="515" fill="#999" font-size="7">j</text>
+
+  <!-- Column numbers (every 5) - aligned with hole positions at colStart=298, colSpacing=24 -->
+  <text x="298" y="225" text-anchor="middle" fill="#999" font-size="7">1</text>
+  <text x="394" y="225" text-anchor="middle" fill="#999" font-size="7">5</text>
+  <text x="514" y="225" text-anchor="middle" fill="#999" font-size="7">10</text>
+  <text x="634" y="225" text-anchor="middle" fill="#999" font-size="7">15</text>
+  <text x="754" y="225" text-anchor="middle" fill="#999" font-size="7">20</text>
+  <text x="874" y="225" text-anchor="middle" fill="#999" font-size="7">25</text>
+  <text x="994" y="225" text-anchor="middle" fill="#999" font-size="7">30</text>
+
+  <!-- Center gap line -->
+  <line x1="300" y1="408" x2="980" y2="408" stroke="#ccc" stroke-width="2" stroke-dasharray="4 2"/>
+
+  <!-- Power rail + (top row 1) - red line -->
+  <line x1="298" y1="246" x2="994" y2="246" stroke="#cc3333" stroke-width="2" opacity="0.4"/>
+  <!-- Power rail - (top row 2) - blue line -->
+  <line x1="298" y1="268" x2="994" y2="268" stroke="#3366cc" stroke-width="2" opacity="0.4"/>
+  <!-- Power rail + (bottom row 13) - red line -->
+  <line x1="298" y1="482" x2="994" y2="482" stroke="#cc3333" stroke-width="2" opacity="0.4"/>
+  <!-- Power rail - (bottom row 14) - blue line -->
+  <line x1="298" y1="504" x2="994" y2="504" stroke="#3366cc" stroke-width="2" opacity="0.4"/>
+
+  <!-- Breadboard holes - generated by JS below -->
+  <g id="breadboard-holes"></g>
+</g>
+
+<!-- ============================================ -->
+<!-- WIRES                                       -->
+<!-- ============================================ -->
+<g id="wires">
+  <!-- 3V3 wire: J1-2 (72,178) to breadboard + rail at col 3 (394, 246) -->
+  <path id="wire-3v3" d="M 72 178 L 72 140 L 394 140 L 394 246"
+        fill="none" stroke="#ff3333" stroke-width="2.5" class="wire hover-target"
+        data-tooltip="3V3 Power Wire|Carries 3.3V from DevKitM-1 J1-2 to breadboard + rail"/>
+
+  <!-- GND wire: J1-1 (72,154) to breadboard - rail at col 28 (946, 268) -->
+  <path id="wire-gnd" d="M 72 154 L 72 120 L 946 120 L 946 268"
+        fill="none" stroke="#444" stroke-width="2.5" class="wire hover-target"
+        data-tooltip="GND Wire|Ground connection from DevKitM-1 J1-1 to breadboard - rail"/>
+
+  <!-- GPIO4 wire: J3-11 (208,394) to col5 row a (394, 306) -->
+  <path id="wire-gpio4" d="M 208 394 L 208 350 L 394 350 L 394 306"
+        fill="none" stroke="#3388ff" stroke-width="2.5" class="wire hover-target"
+        data-tooltip="GPIO4 Signal Wire|Digital output driving LED circuit. GPIO4 = ADC1_CH4, FSPIHD"/>
+
+  <!-- GPIO9 wire: J3-5 (208,250) to col20 row a (754, 306) -->
+  <path id="wire-gpio9" d="M 208 250 L 208 280 L 754 280 L 754 306"
+        fill="none" stroke="#ff8800" stroke-width="2.5" class="wire hover-target"
+        data-tooltip="GPIO9 Signal Wire|Digital input for pushbutton. Internal pull-up enabled. GPIO9 is a strapping pin."/>
+
+  <!-- Cathode to GND rail jumper: col10 row e (514, 394) down to col10 row j (514, 506) -->
+  <path id="wire-led-gnd" d="M 514 394 L 514 506"
+        fill="none" stroke="#444" stroke-width="2" class="wire hover-target"
+        data-tooltip="LED Cathode to GND|Jumper wire from LED cathode (col10-e) to GND rail (col10-j area)"/>
+
+  <!-- Current flow path (animated, shown only when LED is on) -->
+  <!-- GPIO4 -> resistor -> LED -> GND rail -> back to board GND -->
+  <path id="current-path" d="M 208 394 L 208 350 L 394 350 L 394 306 L 398 306 L 510 306 L 514 306 L 514 372 L 514 394 L 514 506 L 946 506 L 946 120 L 72 120 L 72 154"
+        fill="none" stroke="#00ff88" stroke-width="3" opacity="0" class="current-flow hover-target"
+        data-tooltip="Current Flow Path|GPIO4(3.3V) &rarr; Resistor(220&Omega;) &rarr; LED &rarr; GND. ~6.8mA when LED is on."/>
+</g>
+
+<!-- ============================================ -->
+<!-- RESISTOR (220&Omega;) - between col5 and col10 on row a -->
+<!-- ============================================ -->
+<g id="resistor" class="component hover-target" data-tooltip="220&Omega; Resistor|Current-limiting resistor. Color bands: Red-Red-Brown-Gold (22&times;10&sup1;&Omega; &plusmn;5%). Drops ~1.5V at 6.8mA.">
+  <!-- Resistor leads -->
+  <line x1="394" y1="306" x2="398" y2="306" stroke="#aaa" stroke-width="2"/>
+  <line x1="510" y1="306" x2="514" y2="306" stroke="#aaa" stroke-width="2"/>
+  <!-- Resistor body (zigzag) -->
+  <path d="M 398 306 L 406 298 L 414 314 L 422 298 L 430 314 L 438 298 L 446 314 L 454 298 L 462 314 L 470 298 L 478 314 L 486 298 L 494 314 L 502 298 L 510 306"
+        fill="none" stroke="#d4a574" stroke-width="3" stroke-linejoin="round"/>
+  <!-- Color bands -->
+  <!-- Red (2) -->
+  <rect x="426" y="296" width="4" height="22" fill="#cc0000" rx="1"/>
+  <!-- Red (2) -->
+  <rect x="438" y="296" width="4" height="22" fill="#cc0000" rx="1"/>
+  <!-- Brown (&times;10) -->
+  <rect x="450" y="296" width="4" height="22" fill="#8B4513" rx="1"/>
+  <!-- Gold (&plusmn;5%) -->
+  <rect x="462" y="296" width="4" height="22" fill="#FFD700" rx="1"/>
+  <!-- Label -->
+  <text x="454" y="288" text-anchor="middle" fill="#d4a574" font-size="8" font-weight="bold">220&Omega;</text>
+</g>
+
+<!-- ============================================ -->
+<!-- LED (col10, anode at row d, cathode at row e) -->
+<!-- ============================================ -->
+<g id="led-component" class="component hover-target" data-tooltip="Red LED|Anode (longer leg) at col10-d &rarr; connected to resistor via breadboard node a-e. Cathode (shorter leg, flat edge) at col10-e &rarr; jumper to GND. Vf &asymp; 1.8V.">
+  <!-- LED leg (anode, longer - extends up to row d at y=372) -->
+  <line x1="514" y1="372" x2="514" y2="362" stroke="#ccc" stroke-width="2"/>
+  <!-- LED leg (cathode, shorter - extends down to row e at y=394) -->
+  <line x1="514" y1="394" x2="514" y2="404" stroke="#ccc" stroke-width="2"/>
+
+  <!-- LED body (dome shape) -->
+  <ellipse id="led-body" cx="514" cy="383" rx="14" ry="18" fill="url(#led-off)" stroke="#663333" stroke-width="1.5"/>
+
+  <!-- Flat side indicator (cathode side - bottom) -->
+  <line x1="502" y1="397" x2="526" y2="397" stroke="#553333" stroke-width="2"/>
+
+  <!-- LED glow effect (hidden by default) -->
+  <ellipse id="led-glow" cx="514" cy="383" rx="20" ry="24" fill="none" stroke="#ff4444" stroke-width="3" opacity="0" filter="url(#glow)"/>
+
+  <!-- Anode label -->
+  <text x="532" y="376" fill="#ff6666" font-size="7">+</text>
+  <!-- Cathode label -->
+  <text x="532" y="400" fill="#888" font-size="7">&minus;</text>
+</g>
+
+<!-- ============================================ -->
+<!-- PUSHBUTTON (col20, legs at row e and row f) -->
+<!-- ============================================ -->
+<g id="pushbutton" class="component hover-target" data-tooltip="Pushbutton Switch|Normally-open momentary switch. One leg at col20-e (GPIO9 node), other at col20-f (GND node). Pressing connects GPIO9 to GND. Internal pull-up on GPIO9 keeps it HIGH when open.">
+  <!-- Button legs (top - to row e at y=394) -->
+  <line x1="754" y1="394" x2="754" y2="398" stroke="#aaa" stroke-width="2"/>
+  <!-- Button legs (bottom - to row f at y=418) -->
+  <line x1="754" y1="414" x2="754" y2="418" stroke="#aaa" stroke-width="2"/>
+
+  <!-- Button body -->
+  <rect id="btn-body" x="740" y="396" width="28" height="28" rx="4" fill="#555" stroke="#777" stroke-width="1.5"/>
+
+  <!-- Button cap (pressable top) -->
+  <circle id="btn-cap" cx="754" cy="410" r="10" fill="#666" stroke="#888" stroke-width="1.5"/>
+  <!-- Cross pattern on button -->
+  <line x1="748" y1="410" x2="760" y2="410" stroke="#888" stroke-width="1"/>
+  <line x1="754" y1="404" x2="754" y2="416" stroke="#888" stroke-width="1"/>
+
+  <!-- Label -->
+  <text x="754" y="440" text-anchor="middle" fill="#888" font-size="7">SW</text>
+</g>
+
+<!-- ============================================ -->
+<!-- CURRENT FLOW PARTICLES (animated dots)       -->
+<!-- ============================================ -->
+<g id="current-particles" opacity="0">
+  <!-- Particles will be animated via JS -->
+</g>
+
+<!-- ============================================ -->
+<!-- INTERACTIVE CONTROLS (on canvas)             -->
+<!-- ============================================ -->
+<g id="controls-canvas">
+  <!-- LED Toggle -->
+  <g transform="translate(260, 560)" class="hover-target" data-tooltip="LED Circuit Toggle|Turn the LED circuit ON/OFF. When ON, GPIO4 outputs HIGH (3.3V) driving current through the resistor and LED.">
+    <rect x="0" y="0" width="140" height="36" rx="8" fill="#222" stroke="#444" stroke-width="1"/>
+    <text x="10" y="16" fill="#aaa" font-size="9">LED Circuit</text>
+    <text x="10" y="28" fill="#666" font-size="7">Click to toggle</text>
+    <rect id="led-toggle-bg" x="100" y="6" width="32" height="20" rx="10" fill="#333" stroke="#555" stroke-width="1" cursor="pointer"/>
+    <circle id="led-toggle-knob" cx="108" cy="16" r="8" fill="#888"/>
+  </g>
+
+  <!-- Pushbutton control -->
+  <g transform="translate(420, 560)" class="hover-target" data-tooltip="Pushbutton Control|Click to press/release the pushbutton. When pressed, GPIO9 reads LOW. When released, internal pull-up makes it HIGH.">
+    <rect x="0" y="0" width="140" height="36" rx="8" fill="#222" stroke="#444" stroke-width="1"/>
+    <text x="10" y="16" fill="#aaa" font-size="9">Pushbutton</text>
+    <text x="10" y="28" fill="#666" font-size="7">Click to press</text>
+    <rect id="push-toggle-bg" x="100" y="6" width="32" height="20" rx="10" fill="#333" stroke="#555" stroke-width="1" cursor="pointer"/>
+    <circle id="push-toggle-knob" cx="108" cy="16" r="8" fill="#888"/>
+  </g>
+
+  <!-- Circuit info -->
+  <g transform="translate(580, 560)">
+    <rect x="0" y="0" width="200" height="36" rx="8" fill="#222" stroke="#444" stroke-width="1"/>
+    <text x="10" y="14" fill="#aaa" font-size="9">Circuit: GPIO4 &rarr; 220&Omega; &rarr; LED &rarr; GND</text>
+    <text x="10" y="28" fill="#666" font-size="7">I = (3.3V - 1.8V) / 220&Omega; &asymp; 6.8mA</text>
+  </g>
+</g>
+
+<!-- ============================================ -->
+<!-- STATUS PANEL (bottom of SVG)                 -->
+<!-- ============================================ -->
+<g id="status-svg" transform="translate(100, 620)">
+  <rect x="0" y="0" width="900" height="140" rx="10" fill="#111122" stroke="#00d4ff44" stroke-width="1"/>
+
+  <!-- Title -->
+  <text x="450" y="24" text-anchor="middle" fill="#00d4ff" font-size="12" font-weight="bold">CIRCUIT STATUS</text>
+
+  <!-- GPIO4 Status -->
+  <text x="30" y="50" fill="#888" font-size="10">GPIO4 Output:</text>
+  <text id="svg-gpio4" x="30" y="68" fill="#ff4466" font-size="14" font-weight="bold" font-family="monospace">LOW (0V)</text>
+  <circle id="svg-gpio4-dot" cx="180" cy="62" r="6" fill="#ff4466"/>
+
+  <!-- GPIO9 Status -->
+  <text x="220" y="50" fill="#888" font-size="10">GPIO9 Input:</text>
+  <text id="svg-gpio9" x="220" y="68" fill="#00ff88" font-size="14" font-weight="bold" font-family="monospace">HIGH (3.3V)</text>
+  <circle id="svg-gpio9-dot" cx="370" cy="62" r="6" fill="#00ff88"/>
+
+  <!-- Circuit State -->
+  <text x="400" y="50" fill="#888" font-size="10">Circuit:</text>
+  <text id="svg-circuit" x="400" y="68" fill="#ff8800" font-size="14" font-weight="bold" font-family="monospace">OPEN</text>
+  <circle id="svg-circuit-dot" cx="500" cy="62" r="6" fill="#ff8800"/>
+
+  <!-- Current -->
+  <text x="530" y="50" fill="#888" font-size="10">Current:</text>
+  <text id="svg-current" x="530" y="68" fill="#ffcc00" font-size="14" font-weight="bold" font-family="monospace">0.0 mA</text>
+
+  <!-- LED State -->
+  <text x="700" y="50" fill="#888" font-size="10">LED:</text>
+  <text id="svg-led-state" x="700" y="68" fill="#ff4466" font-size="14" font-weight="bold" font-family="monospace">OFF</text>
+  <circle id="svg-led-dot" cx="750" cy="62" r="6" fill="#ff4466"/>
+
+  <!-- Bottom row: explanation -->
+  <text x="30" y="100" fill="#666" font-size="9">GPIO4 drives HIGH &rarr; current flows through 220&Omega; resistor &rarr; LED anode &rarr; LED cathode &rarr; GND</text>
+  <text x="30" y="116" fill="#666" font-size="9">Pushbutton on GPIO9 uses internal pull-up: released=HIGH, pressed=LOW</text>
+
+  <!-- Voltage drop diagram -->
+  <text x="30" y="136" fill="#555" font-size="8">Voltage drops: GPIO4(3.3V) &minus; R(1.5V) &minus; LED(1.8V) = GND(0V)</text>
+</g>
+
+</svg>
+
+<script>
+// ============================================
+// STATE
+// ============================================
+const state = {
+  ledOn: false,
+  buttonPressed: false,
+  gpio4High: false,
+  gpio9High: true
+};
+
+// ============================================
+// BREADBOARD HOLES GENERATION
+// ============================================
+function generateBreadboardHoles() {
+  const holesGroup = document.getElementById('breadboard-holes');
+  const colStart = 298;
+  const colSpacing = 24;
+  const numCols = 30;
+
+  // Power rail holes (top: rows 1,2; bottom: rows 13,14)
+  const railRows = [
+    { y: 246, color: '#cc3333', label: '+' },   // + rail top
+    { y: 268, color: '#3366cc', label: '-' },   // - rail top
+    { y: 482, color: '#cc3333', label: '+' },   // + rail bottom
+    { y: 504, color: '#3366cc', label: '-' }    // - rail bottom
+  ];
+
+  railRows.forEach(row => {
+    for (let c = 0; c < numCols; c++) {
+      const x = colStart + c * colSpacing;
+      const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      circle.setAttribute('cx', x);
+      circle.setAttribute('cy', row.y);
+      circle.setAttribute('r', 3);
+      circle.setAttribute('fill', '#ddd');
+      circle.setAttribute('stroke', row.color);
+      circle.setAttribute('stroke-width', '0.5');
+      circle.setAttribute('opacity', '0.5');
+      holesGroup.appendChild(circle);
+    }
+  });
+
+  // Main terminal strip holes (rows a-e and f-j)
+  const mainRows = [
+    { y: 306, label: 'a' }, { y: 328, label: 'b' }, { y: 350, label: 'c' },
+    { y: 372, label: 'd' }, { y: 394, label: 'e' },
+    { y: 418, label: 'f' }, { y: 440, label: 'g' }, { y: 462, label: 'h' },
+    { y: 484, label: 'i' }, { y: 506, label: 'j' }
+  ];
+
+  mainRows.forEach(row => {
+    for (let c = 0; c < numCols; c++) {
+      const x = colStart + c * colSpacing;
+      const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      circle.setAttribute('cx', x);
+      circle.setAttribute('cy', row.y);
+      circle.setAttribute('r', 3);
+      circle.setAttribute('fill', '#ccc');
+      circle.setAttribute('stroke', '#aaa');
+      circle.setAttribute('stroke-width', '0.5');
+      circle.setAttribute('opacity', '0.6');
+
+      // Add tooltip for holes at circuit connection points
+      const colNum = c + 1;
+      const rowLabel = row.label;
+      let tooltip = `Breadboard hole col${colNum}-${rowLabel}`;
+
+      if (colNum === 5 && rowLabel === 'a') tooltip = 'GPIO4 connection point|GPIO4 wire connects here, then through resistor to LED';
+      if (colNum === 10 && (rowLabel === 'a' || rowLabel === 'd')) tooltip = 'LED anode node|Resistor connects here (a-e node). LED anode leg at row d.';
+      if (colNum === 10 && rowLabel === 'e') tooltip = 'LED cathode node|LED cathode leg here. Jumper wire goes to GND rail.';
+      if (colNum === 20 && rowLabel === 'a') tooltip = 'GPIO9 connection point|GPIO9 wire connects here, through breadboard to pushbutton';
+      if (colNum === 20 && rowLabel === 'e') tooltip = 'Pushbutton top leg|Connects to GPIO9 via breadboard node a-e';
+      if (colNum === 20 && rowLabel === 'f') tooltip = 'Pushbutton bottom leg|Connects to GND via breadboard node f-j';
+      if (colNum === 3 && rowLabel === undefined) tooltip = '+ rail connection|3V3 from DevKitM-1 feeds here';
+
+      if (tooltip.includes('|')) {
+        circle.classList.add('hover-target');
+        circle.setAttribute('data-tooltip', tooltip);
+      }
+
+      holesGroup.appendChild(circle);
+    }
+  });
+}
+
+// ============================================
+// TOOLTIP SYSTEM
+// ============================================
+const tooltip = document.getElementById('tooltip');
+const ttTitle = tooltip.querySelector('.tt-title');
+const ttDetail = tooltip.querySelector('.tt-detail');
+
+document.addEventListener('mousemove', (e) => {
+  const target = e.target.closest('.hover-target');
+  if (target && target.hasAttribute('data-tooltip')) {
+    const parts = target.getAttribute('data-tooltip').split('|');
+    ttTitle.textContent = parts[0];
+    ttDetail.textContent = parts[1] || '';
+    tooltip.classList.add('visible');
+    tooltip.style.left = (e.clientX + 15) + 'px';
+    tooltip.style.top = (e.clientY - 10) + 'px';
+
+    // Keep tooltip on screen
+    const rect = tooltip.getBoundingClientRect();
+    if (rect.right > window.innerWidth) {
+      tooltip.style.left = (e.clientX - rect.width - 10) + 'px';
+    }
+    if (rect.bottom > window.innerHeight) {
+      tooltip.style.top = (e.clientY - rect.height - 10) + 'px';
+    }
+  } else {
+    tooltip.classList.remove('visible');
+  }
+});
+
+// ============================================
+// UPDATE DISPLAY
+// ============================================
+function updateDisplay() {
+  // GPIO4 state
+  const gpio4El = document.getElementById('svg-gpio4');
+  const gpio4Dot = document.getElementById('svg-gpio4-dot');
+  if (state.gpio4High) {
+    gpio4El.textContent = 'HIGH (3.3V)';
+    gpio4El.setAttribute('fill', '#00ff88');
+    gpio4Dot.setAttribute('fill', '#00ff88');
+  } else {
+    gpio4El.textContent = 'LOW (0V)';
+    gpio4El.setAttribute('fill', '#ff4466');
+    gpio4Dot.setAttribute('fill', '#ff4466');
+  }
+
+  // GPIO9 state
+  const gpio9El = document.getElementById('svg-gpio9');
+  const gpio9Dot = document.getElementById('svg-gpio9-dot');
+  if (state.gpio9High) {
+    gpio9El.textContent = 'HIGH (3.3V)';
+    gpio9El.setAttribute('fill', '#00ff88');
+    gpio9Dot.setAttribute('fill', '#00ff88');
+  } else {
+    gpio9El.textContent = 'LOW (0V)';
+    gpio9El.setAttribute('fill', '#ff4466');
+    gpio9Dot.setAttribute('fill', '#ff4466');
+  }
+
+  // Circuit state
+  const circuitEl = document.getElementById('svg-circuit');
+  const circuitDot = document.getElementById('svg-circuit-dot');
+  if (state.ledOn) {
+    circuitEl.textContent = 'CLOSED';
+    circuitEl.setAttribute('fill', '#00ff88');
+    circuitDot.setAttribute('fill', '#00ff88');
+  } else {
+    circuitEl.textContent = 'OPEN';
+    circuitEl.setAttribute('fill', '#ff8800');
+    circuitDot.setAttribute('fill', '#ff8800');
+  }
+
+  // Current
+  const currentEl = document.getElementById('svg-current');
+  const current = state.ledOn ? 6.8 : 0.0;
+  currentEl.textContent = current.toFixed(1) + ' mA';
+
+  // LED state
+  const ledStateEl = document.getElementById('svg-led-state');
+  const ledDot = document.getElementById('svg-led-dot');
+  if (state.ledOn) {
+    ledStateEl.textContent = 'ON';
+    ledStateEl.setAttribute('fill', '#ff4444');
+    ledDot.setAttribute('fill', '#ff4444');
+  } else {
+    ledStateEl.textContent = 'OFF';
+    ledStateEl.setAttribute('fill', '#663333');
+    ledDot.setAttribute('fill', '#663333');
+  }
+
+  // LED visual
+  const ledBody = document.getElementById('led-body');
+  const ledGlow = document.getElementById('led-glow');
+  if (state.ledOn) {
+    ledBody.setAttribute('fill', 'url(#led-on)');
+    ledGlow.setAttribute('opacity', '0.8');
+  } else {
+    ledBody.setAttribute('fill', 'url(#led-off)');
+    ledGlow.setAttribute('opacity', '0');
+  }
+
+  // Current flow visibility
+  const currentPath = document.getElementById('current-path');
+  const currentParticles = document.getElementById('current-particles');
+  if (state.ledOn) {
+    currentPath.setAttribute('opacity', '0.6');
+    currentParticles.setAttribute('opacity', '1');
+  } else {
+    currentPath.setAttribute('opacity', '0');
+    currentParticles.setAttribute('opacity', '0');
+  }
+
+  // Wire brightness based on state
+  const wireGpio4 = document.getElementById('wire-gpio4');
+  if (state.ledOn) {
+    wireGpio4.setAttribute('stroke', '#55aaff');
+    wireGpio4.setAttribute('stroke-width', '3');
+  } else {
+    wireGpio4.setAttribute('stroke', '#3388ff');
+    wireGpio4.setAttribute('stroke-width', '2.5');
+  }
+
+  // Toggle knob positions
+  const ledKnob = document.getElementById('led-toggle-knob');
+  const ledBg = document.getElementById('led-toggle-bg');
+  if (state.ledOn) {
+    ledKnob.setAttribute('cx', '124');
+    ledKnob.setAttribute('fill', '#00ff88');
+    ledBg.setAttribute('fill', '#005533');
+    ledBg.setAttribute('stroke', '#00ff88');
+  } else {
+    ledKnob.setAttribute('cx', '108');
+    ledKnob.setAttribute('fill', '#888');
+    ledBg.setAttribute('fill', '#333');
+    ledBg.setAttribute('stroke', '#555');
+  }
+
+  const pushKnob = document.getElementById('push-toggle-knob');
+  const pushBg = document.getElementById('push-toggle-bg');
+  if (state.buttonPressed) {
+    pushKnob.setAttribute('cx', '124');
+    pushKnob.setAttribute('fill', '#ff8800');
+    pushBg.setAttribute('fill', '#553300');
+    pushBg.setAttribute('stroke', '#ff8800');
+  } else {
+    pushKnob.setAttribute('cx', '108');
+    pushKnob.setAttribute('fill', '#888');
+    pushBg.setAttribute('fill', '#333');
+    pushBg.setAttribute('stroke', '#555');
+  }
+
+  // Pushbutton visual
+  const btnCap = document.getElementById('btn-cap');
+  const btnBody = document.getElementById('btn-body');
+  if (state.buttonPressed) {
+    btnCap.setAttribute('fill', '#ff8800');
+    btnCap.setAttribute('stroke', '#ffaa33');
+    btnBody.setAttribute('fill', '#664400');
+  } else {
+    btnCap.setAttribute('fill', '#666');
+    btnCap.setAttribute('stroke', '#888');
+    btnBody.setAttribute('fill', '#555');
+  }
+}
+
+// ============================================
+// CURRENT FLOW PARTICLES
+// ============================================
+function initCurrentParticles() {
+  const particlesGroup = document.getElementById('current-particles');
+  const path = document.getElementById('current-path');
+
+  // Create animated dots along the path
+  for (let i = 0; i < 8; i++) {
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('r', '3');
+    circle.setAttribute('fill', '#00ff88');
+    circle.setAttribute('filter', 'url(#soft-glow)');
+    circle.classList.add('current-dot');
+    circle.dataset.index = i;
+    particlesGroup.appendChild(circle);
+  }
+}
+
+function animateParticles() {
+  if (!state.ledOn) {
+    requestAnimationFrame(animateParticles);
+    return;
+  }
+
+  const path = document.getElementById('current-path');
+  const dots = document.querySelectorAll('.current-dot');
+  const pathLength = path.getTotalLength();
+  const time = Date.now() / 1000;
+
+  dots.forEach((dot, i) => {
+    const offset = ((time * 80 + i * (pathLength / dots.length)) % pathLength);
+    const point = path.getPointAtLength(offset);
+    dot.setAttribute('cx', point.x);
+    dot.setAttribute('cy', point.y);
+  });
+
+  requestAnimationFrame(animateParticles);
+}
+
+// ============================================
+// CONTROLS
+// ============================================
+function setupControls() {
+  // LED toggle
+  const ledToggleGroup = document.querySelector('#controls-canvas g:first-child');
+  ledToggleGroup.addEventListener('click', () => {
+    state.ledOn = !state.ledOn;
+    state.gpio4High = state.ledOn;
+    updateDisplay();
+  });
+
+  // Pushbutton toggle
+  const pushToggleGroup = document.querySelectorAll('#controls-canvas g')[1];
+  pushToggleGroup.addEventListener('click', () => {
+    state.buttonPressed = !state.buttonPressed;
+    state.gpio9High = !state.buttonPressed;
+    updateDisplay();
+  });
+
+  // Also make the breadboard pushbutton clickable
+  const pushbuttonGroup = document.getElementById('pushbutton');
+  pushbuttonGroup.style.cursor = 'pointer';
+  pushbuttonGroup.addEventListener('click', () => {
+    state.buttonPressed = !state.buttonPressed;
+    state.gpio9High = !state.buttonPressed;
+    updateDisplay();
+  });
+}
+
+// ============================================
+// INIT
+// ============================================
+function init() {
+  generateBreadboardHoles();
+  initCurrentParticles();
+  setupControls();
+  updateDisplay();
+  animateParticles();
+}
+
+init();
+</script>
+
+</body>
+</html>

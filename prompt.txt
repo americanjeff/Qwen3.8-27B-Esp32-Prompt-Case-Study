@@ -1,0 +1,53 @@
+# Prompt: Interactive ESP32-C3 LED Circuit Dashboard
+
+Build a single-page interactive web dashboard that teaches how current flows when an
+**ESP32-C3-DevKitM-1** dev board is wired to a breadboard, a pushbutton switch, and an LED.
+Accuracy matters more than decoration — this needs to be electrically correct, not just pretty.
+
+## 1. Research first
+Before writing any SVG, look up and use as reference:
+- The official Espressif ESP32-C3-DevKitM-1 pinout diagram (silkscreen labels, pin count per
+  side, USB-C port, BOOT/RESET buttons, onboard RGB LED location).
+- A standard full-size solderless breadboard layout (830 tie-points): two outer power rails per
+  side (red "+" / blue "−"), columns numbered 1–30, rows lettered a–e and f–j split by the
+  center gap, and the actual electrical grouping (each column of 5 holes in a-e is one node,
+  same for f-j — NOT the whole row).
+Confirm these details before laying out the SVG so the board and breadboard look and behave like
+the real thing, not a generic rectangle-with-dots.
+
+## 2. The circuit to model
+Keep the circuit itself simple and correct:
+- **GPIO4** on the DevKitM-1 drives the LED through a **220Ω resistor** (LED anode → resistor →
+  GPIO4; LED cathode → GND rail).
+- A **pushbutton switch** is wired from **GPIO9** (or another safe input pin) to GND, with the
+  internal pull-up enabled, so pressing it pulls the pin low.
+- Board 3V3 pin feeds the breadboard's red (+) rail; a GND pin feeds the blue (−) rail.
+- Show the LED's correct polarity (flat side / shorter leg = cathode) and the resistor as a
+  visibly separate component, not merged into a wire.
+
+## 3. Visual requirements (SVG)
+- Model the DevKitM-1 board itself with labeled pins on both header rows (silkscreen text),
+  the ESP32-C3-MINI-1 module outline, USB-C connector, BOOT and RESET buttons, and onboard LED —
+  proportioned like the real board, not a plain rectangle.
+- Model the breadboard with visible individual pinholes, column numbers (1, 5, 10, 15…30) and
+  row letters (a–j), the center divider gap, and colored power rails.
+- Use distinct, real component symbols for the resistor (color bands are a nice touch), the LED,
+  and the pushbutton — not generic circles/rectangles standing in for them.
+- Color-code wires by function (e.g. red = power, black = ground, a distinct color for the
+  signal/GPIO line) and keep that convention consistent throughout.
+
+## 4. Interactivity
+- A toggle/press control for the switch that actually changes GPIO9's logic state.
+- When the LED circuit is "on," animate current visually — small moving dots or a flowing
+  gradient along the actual wire path from 3V3 → rail → resistor → LED → GND rail → GND pin —
+  not just a static glow. Show it only flowing on the closed-circuit path.
+- A small status panel/dashboard showing live state: GPIO4 output level, GPIO9 input level,
+  whether the LED circuit is closed, and (optionally) an illustrative current value in mA.
+- Hovering or clicking a pin, wire, or component should show a short tooltip: pin name/function,
+  or what that wire is carrying.
+
+## 5. Build constraints
+- Single self-contained HTML file (inline SVG + JS/CSS), no external image assets.
+- Before finalizing, do a self-check pass: does the pin count and label layout match the
+  DevKitM-1 reference, and does the breadboard's hole/row/column layout match a real breadboard?
+  Fix any mismatch rather than shipping it.
